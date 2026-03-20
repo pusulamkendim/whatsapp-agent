@@ -27,8 +27,8 @@ def send_message(to: str, text: str):
             print(f"WhatsApp mesaj gönderildi → {to}")
 
 
-def extract_message(payload: dict) -> tuple[str, str] | None:
-    """Webhook payload'dan müşteri numarası ve mesaj metnini çıkar"""
+def extract_message(payload: dict) -> tuple[str, str, str] | None:
+    """Webhook payload'dan müşteri numarası, mesaj metni ve mesaj ID'sini çıkar"""
     try:
         entry = payload["entry"][0]
         changes = entry["changes"][0]
@@ -40,11 +40,12 @@ def extract_message(payload: dict) -> tuple[str, str] | None:
 
         message = value["messages"][0]
         sender = message["from"]  # müşteri telefon numarası
+        msg_id = message.get("id", "")
 
         # Sadece text mesajları destekle (şimdilik)
         if message["type"] == "text":
             text = message["text"]["body"]
-            return sender, text
+            return sender, text, msg_id
 
         return None
     except (KeyError, IndexError):

@@ -121,3 +121,35 @@ def root():
         "agents": ["restaurant", "retreat"],
         "routing": dict(AGENT_CODES),
     }
+
+
+@app.get("/privacy", response_class=PlainTextResponse)
+def privacy_policy():
+    return """Privacy Policy
+
+Last updated: March 20, 2026
+
+This WhatsApp agent service ("Service") is operated for the purpose of providing automated customer assistance.
+
+Information We Collect:
+- Phone number (provided via WhatsApp)
+- Message content (to process your requests)
+
+How We Use Information:
+- To respond to your inquiries
+- To process orders and bookings
+- To improve our service
+
+Data Retention:
+- Conversation data is retained only for the duration of your session
+- Order data is retained for business record purposes
+
+Your Rights:
+- You may stop interacting with the service at any time
+- You may request deletion of your data by contacting us
+
+Contact:
+For questions about this privacy policy, please reach out via WhatsApp.
+
+This service uses WhatsApp Business API by Meta Platforms, Inc.
+"""

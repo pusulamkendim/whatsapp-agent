@@ -80,7 +80,26 @@ handoffs: dict[str, bool] = {}
 
 
 def execute_handoff(customer_phone: str, customer_name: str, summary: str, interest: str):
-    """Özgür Can'a bildirim mesajı gönder"""
+    """Özgür Can'a bildirim mesajı gönder + DB'ye kaydet"""
+    from app.database import SessionLocal
+    from app.models import Handoff
+
+    # DB'ye kaydet
+    db = SessionLocal()
+    try:
+        db.add(Handoff(
+            customer_phone=customer_phone,
+            customer_name=customer_name,
+            conversation_summary=summary,
+            interest_level=interest or "belirtilmedi",
+        ))
+        db.commit()
+    except Exception as e:
+        print(f"⚠️ Handoff DB kayıt hatası: {e}")
+    finally:
+        db.close()
+
+    # WhatsApp bildirimi
     message = (
         f"📋 Yeni İnziva İlgilisi\n"
         f"━━━━━━━━━━━━━━━━━━\n"

@@ -1,5 +1,6 @@
-import asyncio
+import json
 from collections import OrderedDict
+from datetime import date
 from fastapi import FastAPI, Request, Query, BackgroundTasks
 from fastapi.responses import PlainTextResponse
 from app.config import WHATSAPP_VERIFY_TOKEN
@@ -7,6 +8,7 @@ from app.database import init_db, SessionLocal
 from app.whatsapp import send_message, extract_message
 from app.agent import chat as restaurant_chat
 from app.retreat_agent import chat as retreat_chat
+from app.models import Conversation, DailyStat
 
 app = FastAPI(title="WhatsApp Multi-Agent")
 
@@ -74,8 +76,66 @@ def detect_agent(sender: str, text: str) -> str:
     return "retreat"
 
 
+# Bugün yazanları takip (unique user + new user kontrolü)
+daily_seen_users: dict[str, set] = {}  # date_str -> set of phones
+all_known_users: set = set()
+
+
+def save_message(sender: str, agent_type: str, role: str, message: str):
+    """Mesajı DB'ye kaydet + günlük istatistik güncelle"""
+    db = SessionLocal()
+    try:
+        # Konuşmayı kaydet
+        db.add(Conversation(
+            customer_phone=sender,
+            agent_type=agent_type,
+            role=role,
+            message=message,
+        ))
+
+        # Günlük istatistik güncelle
+        today = date.today()
+        stat = db.query(DailyStat).filter(DailyStat.date == today).first()
+        if not stat:
+            stat = DailyStat(date=today)
+            db.add(stat)
+
+        stat.total_messages = (stat.total_messages or 0) + 1
+        if role == "user":
+            stat.user_messages = (stat.user_messages or 0) + 1
+        else:
+            stat.agent_messages = (stat.agent_messages or 0) + 1
+
+        # Unique user takibi
+        today_str = str(today)
+        if today_str not in daily_seen_users:
+            daily_seen_users[today_str] = set()
+
+        if role == "user" and sender not in daily_seen_users[today_str]:
+            daily_seen_users[today_str].add(sender)
+            stat.unique_users = len(daily_seen_users[today_str])
+
+            if sender not in all_known_users:
+                all_known_users.add(sender)
+                stat.new_users = (stat.new_users or 0) + 1
+
+        # Agent type breakdown
+        breakdown = json.loads(stat.agent_type_breakdown or "{}")
+        breakdown[agent_type] = breakdown.get(agent_type, 0) + 1
+        stat.agent_type_breakdown = json.dumps(breakdown)
+
+        db.commit()
+    except Exception as e:
+        print(f"⚠️ DB kayıt hatası: {e}")
+    finally:
+        db.close()
+
+
 def process_message(sender: str, clean_text: str, agent_type: str):
     """Mesajı arka planda işle"""
+    # Kullanıcı mesajını kaydet
+    save_message(sender, agent_type, "user", clean_text)
+
     try:
         if agent_type == "restaurant":
             db = SessionLocal()
@@ -88,7 +148,10 @@ def process_message(sender: str, clean_text: str, agent_type: str):
         else:
             response = "Bir sorun oluştu."
 
-        print(f"🤖 [{agent_type}] Cevap: {response[:100]}...")
+        # Agent cevabını kaydet
+        save_message(sender, agent_type, "agent", response)
+
+        print(f"🤖 [{agent_type}] Cevap: {response}")
         send_message(sender, response)
     except Exception as e:
         print(f"❌ Hata: {e}")
@@ -174,3 +237,64 @@ For questions about this privacy policy, please reach out via WhatsApp.
 
 This service uses WhatsApp Business API by Meta Platforms, Inc.
 """
+
+
+@app.get("/api/conversations")
+def get_conversations(phone: str = None):
+    """Konuşma geçmişini görüntüle"""
+    db = SessionLocal()
+    try:
+        query = db.query(Conversation).order_by(Conversation.created_at.desc())
+        if phone:
+            query = query.filter(Conversation.customer_phone == phone)
+        messages = query.limit(200).all()
+        return [{
+            "id": m.id,
+            "phone": m.customer_phone,
+            "agent": m.agent_type,
+            "role": m.role,
+            "message": m.message,
+            "time": m.created_at.isoformat() if m.created_at else "",
+        } for m in messages]
+    finally:
+        db.close()
+
+
+@app.get("/api/stats")
+def get_stats(days: int = 7):
+    """Son X günün istatistikleri"""
+    db = SessionLocal()
+    try:
+        stats = db.query(DailyStat).order_by(DailyStat.date.desc()).limit(days).all()
+        return [{
+            "date": str(s.date),
+            "total_messages": s.total_messages or 0,
+            "user_messages": s.user_messages or 0,
+            "agent_messages": s.agent_messages or 0,
+            "unique_users": s.unique_users or 0,
+            "new_users": s.new_users or 0,
+            "handoffs": s.handoffs or 0,
+            "breakdown": json.loads(s.agent_type_breakdown or "{}"),
+        } for s in stats]
+    finally:
+        db.close()
+
+
+@app.get("/api/handoffs")
+def get_handoffs():
+    """Handoff kayıtlarını görüntüle"""
+    from app.models import Handoff
+    db = SessionLocal()
+    try:
+        handoffs = db.query(Handoff).order_by(Handoff.created_at.desc()).limit(50).all()
+        return [{
+            "id": h.id,
+            "phone": h.customer_phone,
+            "name": h.customer_name,
+            "summary": h.conversation_summary,
+            "interest": h.interest_level,
+            "status": h.status,
+            "time": h.created_at.isoformat() if h.created_at else "",
+        } for h in handoffs]
+    finally:
+        db.close()

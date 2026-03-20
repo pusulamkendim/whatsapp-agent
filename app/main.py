@@ -28,8 +28,14 @@ RESTAURANT_NAME = "Lezzet Durağı"
 @app.on_event("startup")
 def startup():
     init_db()
+    # Restoran menü verisi yükle (SQLite sıfırlanırsa diye)
+    from app.models import Restaurant, MenuItem
+    db = SessionLocal()
+    if db.query(Restaurant).count() == 0:
+        import importlib, seed_menu
+        seed_menu.seed()
+    db.close()
     print("✅ WhatsApp Multi-Agent başlatıldı!")
-    print("   Aktif agent'lar: restaurant, retreat")
 
 
 @app.get("/webhook")

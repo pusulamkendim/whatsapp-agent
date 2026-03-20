@@ -1,14 +1,38 @@
 from google import genai
 from google.genai import types
 from app.config import GEMINI_API_KEY
+from app.whatsapp import send_message
 import os
+import json
 
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# İnziva sahibinin WhatsApp numarası (Özgür Can)
+OWNER_PHONE = os.getenv("RETREAT_OWNER_PHONE", "905555574128")  # .env'den alınır
 
 # Knowledge base'i yükle
 KB_PATH = os.path.join(os.path.dirname(__file__), "..", "retreat_docs", "knowledge_base.md")
 with open(KB_PATH, "r", encoding="utf-8") as f:
     KNOWLEDGE_BASE = f.read()
+
+# Tool tanımları
+tool_definitions = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="handoff_to_human",
+            description="Müşteriyi inziva ekibiyle görüştürmek için kullan. Müşteri kayıt olmak istediğinde, özel sorular sorduğunda, ödeme/taksit detayları istediğinde veya sağlık/psikolojik durum paylaştığında çağır. Adını mutlaka sor ve özet bilgi ile birlikte gönder.",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "customer_name": types.Schema(type=types.Type.STRING, description="Müşterinin adı soyadı"),
+                    "conversation_summary": types.Schema(type=types.Type.STRING, description="Konuşmanın kısa özeti: ne sordu, neyle ilgilendi, özel durumu var mı"),
+                    "interest_level": types.Schema(type=types.Type.STRING, description="İlgi seviyesi: yüksek, orta, düşük"),
+                },
+                required=["customer_name", "conversation_summary"],
+            ),
+        ),
+    ]
+)
 
 SYSTEM_PROMPT = f"""Sen Samma Karuna'nın Koh Phangan Nefes ve Tantra İnzivası (23-30 Mayıs 2026) hakkında bilgi veren WhatsApp asistanısın.
 
@@ -16,7 +40,7 @@ Görevin:
 - İnziva hakkında soruları samimi, sıcak ve bilgilendirici şekilde yanıtlamak
 - Merak uyandırmak ve ilham vermek (ama baskıcı satış yapmamak)
 - Kişinin sorularını dinleyip, durumuna uygun bilgi vermek
-- Gerektiğinde insana yönlendirmek
+- Gerektiğinde handoff_to_human tool'unu kullanarak insana yönlendirmek
 
 Tarzın:
 - Türkçe, samimi, sıcak ama profesyonel
@@ -28,17 +52,16 @@ Kurallar:
 - SADECE aşağıdaki bilgi bankasındaki bilgileri kullan, bilmediğin şeyleri UYDURMA
 - Fiyatları, tarihleri, program detaylarını bilgi bankasından al
 - Eğer bilgi bankasında olmayan bir soru gelirse "Bu konuda sizi doğrudan ekibimizle görüştürmek isterim" de
-- Kişi kayıt olmak istediğinde, detaylı sorular sorduğunda veya özel durumunu paylaştığında → insana yönlendir
 - İnziva dışında konularla ilgili sorulara yanıt verme, nazikçe konuyu inzivaya getir
 
-İnsana yönlendirme zamanı:
-- "Kayıt olmak istiyorum" → "Harika! Sizinle kısa bir online görüşme planlamamız gerekiyor. Sizi Özgür Can ile görüştüreyim."
-- Kişisel sağlık/psikolojik durumlarla ilgili sorular → insana yönlendir
-- Ödeme detayları, taksit, özel indirim talepleri → insana yönlendir
-- 3-4 mesajdan sonra ilgi devam ediyorsa → "İsterseniz sizi ekibimizle görüştüreyim, tüm sorularınızı detaylıca konuşabilirsiniz"
+handoff_to_human tool'unu şu durumlarda kullan:
+- Müşteri "kayıt olmak istiyorum", "katılmak istiyorum" dediğinde
+- Kişisel sağlık/psikolojik durumlarla ilgili sorular geldiğinde
+- Ödeme detayları, taksit, özel indirim talep edildiğinde
+- 4-5 mesajdan sonra ilgi devam ediyorsa
 
-Yönlendirme mesajı:
-"Sizi ekibimizle görüştürmek istiyorum. Özgür Can size kısa bir online görüşme için ulaşacak. Adınızı öğrenebilir miyim?"
+Tool'u çağırmadan ÖNCE mutlaka müşterinin adını sor. Adını aldıktan sonra tool'u çağır.
+Tool çağrıldıktan sonra müşteriye "Bilgilerinizi ekibimize ilettim, Özgür Can en kısa sürede sizinle iletişime geçecek 🙏" de.
 
 ---
 
@@ -49,8 +72,25 @@ BİLGİ BANKASI:
 
 # Konuşma geçmişi
 conversations: dict[str, list] = {}
-# İnsana yönlendirme sayacı
-message_counts: dict[str, int] = {}
+# Handoff yapılmış mı takibi
+handoffs: dict[str, bool] = {}
+
+
+def execute_handoff(customer_phone: str, customer_name: str, summary: str, interest: str):
+    """Özgür Can'a bildirim mesajı gönder"""
+    message = (
+        f"📋 Yeni İnziva İlgilisi\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"👤 İsim: {customer_name}\n"
+        f"📱 Telefon: +{customer_phone}\n"
+        f"🔥 İlgi: {interest or 'belirtilmedi'}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"💬 Özet:\n{summary}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"wa.me/{customer_phone}"
+    )
+    send_message(OWNER_PHONE, message)
+    return "Bilgiler ekibe iletildi."
 
 
 def chat(customer_id: str, message: str) -> str:
@@ -58,12 +98,9 @@ def chat(customer_id: str, message: str) -> str:
 
     if customer_id not in conversations:
         conversations[customer_id] = []
-        message_counts[customer_id] = 0
 
-    message_counts[customer_id] += 1
     history = conversations[customer_id]
 
-    # Kullanıcı mesajını ekle
     history.append(types.Content(
         role="user",
         parts=[types.Part.from_text(text=message)],
@@ -74,15 +111,69 @@ def chat(customer_id: str, message: str) -> str:
         contents=history,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
+            tools=[tool_definitions],
             temperature=0.7,
         ),
     )
 
-    reply = response.candidates[0].content.parts[0].text
+    # Tool call loop
+    max_iterations = 3
+    iteration = 0
+
+    while iteration < max_iterations:
+        iteration += 1
+        candidate = response.candidates[0]
+        parts = candidate.content.parts
+
+        function_calls = [p for p in parts if p.function_call]
+
+        if not function_calls:
+            break
+
+        history.append(candidate.content)
+
+        function_responses = []
+        for part in function_calls:
+            fc = part.function_call
+            args = dict(fc.args) if fc.args else {}
+
+            if fc.name == "handoff_to_human":
+                result = execute_handoff(
+                    customer_phone=customer_id,
+                    customer_name=args.get("customer_name", "Bilinmiyor"),
+                    summary=args.get("conversation_summary", ""),
+                    interest=args.get("interest_level", ""),
+                )
+                handoffs[customer_id] = True
+            else:
+                result = "Bilinmeyen tool"
+
+            function_responses.append(
+                types.Part.from_function_response(
+                    name=fc.name,
+                    response={"result": result},
+                )
+            )
+
+        history.append(types.Content(
+            role="user",
+            parts=function_responses,
+        ))
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=history,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                tools=[tool_definitions],
+                temperature=0.7,
+            ),
+        )
+
+    final_text = response.candidates[0].content.parts[0].text
     history.append(response.candidates[0].content)
 
-    # Geçmişi kırp
     if len(history) > 40:
         conversations[customer_id] = history[-40:]
 
-    return reply
+    return final_text

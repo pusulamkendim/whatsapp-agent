@@ -81,7 +81,7 @@ daily_seen_users: dict[str, set] = {}  # date_str -> set of phones
 all_known_users: set = set()
 
 
-def save_message(sender: str, agent_type: str, role: str, message: str):
+def save_message(sender: str, agent_type: str, role: str, message: str, msg_id: str = ""):
     """Mesajı DB'ye kaydet + günlük istatistik güncelle"""
     db = SessionLocal()
     try:
@@ -91,6 +91,7 @@ def save_message(sender: str, agent_type: str, role: str, message: str):
             agent_type=agent_type,
             role=role,
             message=message,
+            msg_id=msg_id,
         ))
 
         # Günlük istatistik güncelle
@@ -131,10 +132,10 @@ def save_message(sender: str, agent_type: str, role: str, message: str):
         db.close()
 
 
-def process_message(sender: str, clean_text: str, agent_type: str):
+def process_message(sender: str, clean_text: str, agent_type: str, msg_id: str = ""):
     """Mesajı arka planda işle"""
     # Kullanıcı mesajını kaydet
-    save_message(sender, agent_type, "user", clean_text)
+    save_message(sender, agent_type, "user", clean_text, msg_id)
 
     try:
         if agent_type == "restaurant":
@@ -163,16 +164,36 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     """Gelen WhatsApp mesajlarını işle"""
     payload = await request.json()
 
+    # Raw payload logla (debug)
+    print(f"📦 Webhook payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
+
     result = extract_message(payload)
     if not result:
         return {"status": "ignored"}
 
     sender, text, msg_id = result
 
-    # Duplicate mesaj kontrolü
+    # Kendi business numaramızdan gelen mesajları işleme
+    if sender == "905428078429":
+        print(f"⏭️ Kendi numaramızdan mesaj, atlanıyor")
+        return {"status": "self_message"}
+
+    # Duplicate mesaj kontrolü (memory + DB)
     if msg_id in processed_messages:
-        print(f"⏭️ Duplicate mesaj atlandı: {msg_id}")
+        print(f"⏭️ Duplicate mesaj atlandı (memory): {msg_id}")
         return {"status": "duplicate"}
+
+    # DB'den de kontrol et (restart sonrası memory boş olabilir)
+    if msg_id:
+        db_check = SessionLocal()
+        try:
+            existing = db_check.query(Conversation).filter(Conversation.msg_id == msg_id).first()
+            if existing:
+                print(f"⏭️ Duplicate mesaj atlandı (DB): {msg_id}")
+                processed_messages[msg_id] = True
+                return {"status": "duplicate"}
+        finally:
+            db_check.close()
 
     processed_messages[msg_id] = True
     if len(processed_messages) > MAX_PROCESSED:
@@ -193,7 +214,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     print(f"📩 [{agent_type}] {sender} → {clean_text}")
 
     # Hemen 200 dön, mesajı arka planda işle (Meta timeout'a takılmasın)
-    background_tasks.add_task(process_message, sender, clean_text, agent_type)
+    background_tasks.add_task(process_message, sender, clean_text, agent_type, msg_id)
 
     return {"status": "ok"}
 

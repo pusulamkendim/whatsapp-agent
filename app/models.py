@@ -58,6 +58,7 @@ class Conversation(Base):
     agent_type = Column(String, nullable=False)  # retreat, restaurant
     role = Column(String, nullable=False)  # user, agent
     message = Column(Text, nullable=False)
+    msg_id = Column(String, default="")  # WhatsApp message ID (duplicate check)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 

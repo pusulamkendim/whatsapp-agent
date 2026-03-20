@@ -7,8 +7,8 @@ import json
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# İnziva sahibinin WhatsApp numarası (Özgür Can)
-OWNER_PHONE = os.getenv("RETREAT_OWNER_PHONE", "905555574128")  # .env'den alınır
+# İnziva sahiplerinin WhatsApp numaraları (virgülle ayrılmış)
+OWNER_PHONES = [p.strip() for p in os.getenv("RETREAT_OWNER_PHONES", "905555574128").split(",")]
 
 # Knowledge base'i yükle
 KB_PATH = os.path.join(os.path.dirname(__file__), "..", "retreat_docs", "knowledge_base.md")
@@ -111,7 +111,8 @@ def execute_handoff(customer_phone: str, customer_name: str, summary: str, inter
         f"━━━━━━━━━━━━━━━━━━\n"
         f"wa.me/{customer_phone}"
     )
-    send_message(OWNER_PHONE, message)
+    for phone in OWNER_PHONES:
+        send_message(phone, message)
     return "Bilgiler ekibe iletildi."
 
 

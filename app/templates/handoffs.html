@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Yonlendirmeler{% endblock %}
+
+{% block content %}
+<h2 class="text-2xl font-bold text-gray-800 mb-6">Yonlendirmeler</h2>
+
+<div class="bg-white rounded-xl shadow overflow-hidden">
+    <table class="w-full">
+        <thead class="bg-gray-50">
+            <tr>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Isim</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Telefon</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ozet</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ilgi</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Durum</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tarih</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Islem</th>
+            </tr>
+        </thead>
+        <tbody id="handoffs-table" class="divide-y">
+            <tr><td colspan="7" class="px-6 py-4 text-gray-400">Yukleniyor...</td></tr>
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const statusColors = {
+    pending: 'bg-yellow-100 text-yellow-800',
+    contacted: 'bg-blue-100 text-blue-800',
+    converted: 'bg-green-100 text-green-800',
+    lost: 'bg-red-100 text-red-800',
+};
+
+const statusLabels = {
+    pending: 'Bekliyor',
+    contacted: 'Iletisime Gecildi',
+    converted: 'Kayit Oldu',
+    lost: 'Kayip',
+};
+
+async function loadHandoffs() {
+    const res = await fetch('/api/handoffs');
+    const handoffs = await res.json();
+
+    const tbody = document.getElementById('handoffs-table');
+    tbody.innerHTML = '';
+
+    if (handoffs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-4 text-gray-400">Henuz yonlendirme yok</td></tr>';
+        return;
+    }
+
+    handoffs.forEach(h => {
+        const time = new Date(h.time + 'Z');
+        const hh = (time.getUTCHours() + 3) % 24;
+        const dateStr = `${time.getUTCDate().toString().padStart(2,'0')}/${(time.getUTCMonth()+1).toString().padStart(2,'0')}`;
+        const timeStr = `${hh.toString().padStart(2,'0')}:${time.getUTCMinutes().toString().padStart(2,'0')}`;
+        const phone = h.phone.replace('tg_','').replace('ig_','');
+
+        tbody.innerHTML += `
+            <tr class="hover:bg-gray-50">
+                <td class="px-6 py-4 font-medium text-gray-700">${h.name || '-'}</td>
+                <td class="px-6 py-4">
+                    <a href="https://wa.me/${phone}" target="_blank" class="text-indigo-600 hover:underline">${phone}</a>
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">${h.summary || '-'}</td>
+                <td class="px-6 py-4">
+                    <span class="text-sm">${h.interest || '-'}</span>
+                </td>
+                <td class="px-6 py-4">
+                    <select onchange="updateStatus(${h.id}, this.value)" class="text-sm rounded-lg px-2 py-1 border ${statusColors[h.status] || ''}">
+                        ${Object.entries(statusLabels).map(([k, v]) =>
+                            `<option value="${k}" ${h.status === k ? 'selected' : ''}>${v}</option>`
+                        ).join('')}
+                    </select>
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-400">${dateStr} ${timeStr}</td>
+                <td class="px-6 py-4">
+                    <a href="/dashboard/conversations?phone=${h.phone}" class="text-indigo-600 hover:underline text-sm">Konusma</a>
+                </td>
+            </tr>
+        `;
+    });
+}
+
+async function updateStatus(id, status) {
+    await fetch(`/api/handoffs/${id}`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({status})
+    });
+}
+
+loadHandoffs();
+</script>
+{% endblock %}

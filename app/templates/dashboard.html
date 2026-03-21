@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<h2 class="text-2xl font-bold text-gray-800 mb-6">Dashboard</h2>
+
+<!-- Stat Cards -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+    <div class="bg-white rounded-xl shadow p-6">
+        <p class="text-gray-500 text-sm">Bugun Mesaj</p>
+        <p class="text-3xl font-bold text-gray-800 mt-2" id="today-messages">-</p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-6">
+        <p class="text-gray-500 text-sm">Tekil Kullanici</p>
+        <p class="text-3xl font-bold text-indigo-600 mt-2" id="today-users">-</p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-6">
+        <p class="text-gray-500 text-sm">Yeni Kullanici</p>
+        <p class="text-3xl font-bold text-green-600 mt-2" id="today-new">-</p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-6">
+        <p class="text-gray-500 text-sm">Yonlendirme</p>
+        <p class="text-3xl font-bold text-orange-600 mt-2" id="today-handoffs">-</p>
+    </div>
+</div>
+
+<!-- Chart -->
+<div class="bg-white rounded-xl shadow p-6 mb-8">
+    <h3 class="text-lg font-semibold text-gray-700 mb-4">Son 7 Gun</h3>
+    <canvas id="statsChart" height="80"></canvas>
+</div>
+
+<!-- Recent Conversations -->
+<div class="bg-white rounded-xl shadow p-6">
+    <h3 class="text-lg font-semibold text-gray-700 mb-4">Son Konusmalar</h3>
+    <div id="recent-conversations" class="space-y-3">
+        <p class="text-gray-400">Yukleniyor...</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadDashboard() {
+    // Stats
+    const statsRes = await fetch('/api/stats?days=7');
+    const stats = await statsRes.json();
+
+    if (stats.length > 0) {
+        const today = stats[0];
+        document.getElementById('today-messages').textContent = today.total_messages;
+        document.getElementById('today-users').textContent = today.unique_users;
+        document.getElementById('today-new').textContent = today.new_users;
+        document.getElementById('today-handoffs').textContent = today.handoffs;
+    }
+
+    // Chart
+    const labels = stats.map(s => s.date.slice(5)).reverse();
+    const messages = stats.map(s => s.total_messages).reverse();
+    const users = stats.map(s => s.unique_users).reverse();
+
+    new Chart(document.getElementById('statsChart'), {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                { label: 'Mesaj', data: messages, backgroundColor: 'rgba(79, 70, 229, 0.8)' },
+                { label: 'Kullanici', data: users, backgroundColor: 'rgba(16, 185, 129, 0.8)' }
+            ]
+        },
+        options: {
+            responsive: true,
+            scales: { y: { beginAtZero: true } }
+        }
+    });
+
+    // Recent conversations
+    const convRes = await fetch('/api/conversations');
+    const convs = await convRes.json();
+
+    const grouped = {};
+    convs.forEach(m => {
+        if (!grouped[m.phone]) grouped[m.phone] = [];
+        grouped[m.phone].push(m);
+    });
+
+    const container = document.getElementById('recent-conversations');
+    container.innerHTML = '';
+
+    const phones = Object.keys(grouped).slice(0, 5);
+    phones.forEach(phone => {
+        const msgs = grouped[phone];
+        const last = msgs[0];
+        const channel = phone.startsWith('tg_') ? '🔵 TG' : phone.startsWith('ig_') ? '📷 IG' : '🟢 WA';
+        const displayPhone = phone.replace('tg_', '').replace('ig_', '');
+        const time = new Date(last.time + 'Z');
+        const h = (time.getUTCHours() + 3) % 24;
+        const timeStr = `${h.toString().padStart(2,'0')}:${time.getUTCMinutes().toString().padStart(2,'0')}`;
+
+        container.innerHTML += `
+            <a href="/dashboard/conversations?phone=${phone}" class="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 border transition">
+                <div class="flex items-center gap-3">
+                    <span class="text-sm">${channel}</span>
+                    <div>
+                        <p class="font-medium text-gray-700">${displayPhone}</p>
+                        <p class="text-sm text-gray-400 truncate max-w-md">${last.message.slice(0, 80)}...</p>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs text-gray-400">${timeStr}</p>
+                    <p class="text-xs text-gray-400">${msgs.length} mesaj</p>
+                </div>
+            </a>
+        `;
+    });
+}
+
+loadDashboard();
+</script>
+{% endblock %}

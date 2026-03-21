@@ -1,18 +1,28 @@
 import json
+import os
 from collections import OrderedDict
 from datetime import date
 from fastapi import FastAPI, Request, Query, BackgroundTasks
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
 from app.config import WHATSAPP_VERIFY_TOKEN
 from app.database import init_db, SessionLocal
 from app.whatsapp import send_message as wa_send, extract_message as wa_extract
 from app.telegram import send_message as tg_send, extract_message as tg_extract, setup_webhook as tg_setup_webhook
 from app.instagram import send_message as ig_send, extract_message as ig_extract
 from app.agent import chat as restaurant_chat
+from app import retreat_agent
 from app.retreat_agent import chat as retreat_chat
-from app.models import Conversation, DailyStat
+from app.models import Conversation, DailyStat, Handoff
 
 app = FastAPI(title="WhatsApp Multi-Agent")
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+
+# Agent config (runtime'da degistirilebilir)
+agent_configs = {
+    "retreat": {"name": "Inziva Agent", "active": True, "model": "gemini-2.5-flash"},
+    "restaurant": {"name": "Restoran Agent", "active": True, "model": "gemini-2.5-flash"},
+}
 
 # Agent routing: müşteri hangi agent'a bağlı?
 customer_agents: dict[str, str] = {}
@@ -426,7 +436,6 @@ def get_stats(days: int = 7):
 @app.get("/api/handoffs")
 def get_handoffs():
     """Handoff kayıtlarını görüntüle"""
-    from app.models import Handoff
     db = SessionLocal()
     try:
         handoffs = db.query(Handoff).order_by(Handoff.created_at.desc()).limit(50).all()
@@ -441,3 +450,106 @@ def get_handoffs():
         } for h in handoffs]
     finally:
         db.close()
+
+
+@app.put("/api/handoffs/{handoff_id}")
+async def update_handoff(handoff_id: int, request: Request):
+    """Handoff durumunu güncelle"""
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        h = db.query(Handoff).filter(Handoff.id == handoff_id).first()
+        if not h:
+            return {"error": "not found"}
+        if "status" in data:
+            h.status = data["status"]
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/agents")
+def get_agents():
+    """Agent listesi ve ayarları"""
+    result = []
+    for agent_type, config in agent_configs.items():
+        prompt = ""
+        if agent_type == "retreat":
+            prompt = retreat_agent.SYSTEM_PROMPT[:2000]
+        elif agent_type == "restaurant":
+            from app.agent import get_system_prompt
+            prompt = get_system_prompt("Lezzet Durağı")
+        result.append({
+            "type": agent_type,
+            "name": config["name"],
+            "active": config["active"],
+            "model": config["model"],
+            "system_prompt": prompt,
+        })
+    return result
+
+
+@app.put("/api/agents/{agent_type}/config")
+async def update_agent_config(agent_type: str, request: Request):
+    """Agent ayarlarını güncelle"""
+    if agent_type not in agent_configs:
+        return {"error": "unknown agent"}
+    data = await request.json()
+    if "active" in data:
+        agent_configs[agent_type]["active"] = data["active"]
+    if "system_prompt" in data and agent_type == "retreat":
+        retreat_agent.SYSTEM_PROMPT = data["system_prompt"]
+    return {"ok": True}
+
+
+@app.get("/api/knowledge")
+def get_knowledge():
+    """Knowledge base içeriği"""
+    kb_path = os.path.join(os.path.dirname(__file__), "..", "retreat_docs", "knowledge_base.md")
+    try:
+        with open(kb_path, "r", encoding="utf-8") as f:
+            return {"content": f.read()}
+    except FileNotFoundError:
+        return {"content": ""}
+
+
+@app.put("/api/knowledge")
+async def update_knowledge(request: Request):
+    """Knowledge base güncelle"""
+    data = await request.json()
+    kb_path = os.path.join(os.path.dirname(__file__), "..", "retreat_docs", "knowledge_base.md")
+    with open(kb_path, "w", encoding="utf-8") as f:
+        f.write(data["content"])
+    # Retreat agent'ın system prompt'unu yeniden yükle
+    with open(kb_path, "r", encoding="utf-8") as f:
+        retreat_agent.KNOWLEDGE_BASE = f.read()
+    retreat_agent.SYSTEM_PROMPT = retreat_agent.SYSTEM_PROMPT  # trigger reload if needed
+    return {"ok": True}
+
+
+# ============ DASHBOARD ROUTES ============
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_page(request: Request):
+    return templates.TemplateResponse("dashboard.html", {"request": request, "active": "dashboard"})
+
+
+@app.get("/dashboard/conversations", response_class=HTMLResponse)
+def conversations_page(request: Request):
+    return templates.TemplateResponse("conversations.html", {"request": request, "active": "conversations"})
+
+
+@app.get("/dashboard/handoffs", response_class=HTMLResponse)
+def handoffs_page(request: Request):
+    return templates.TemplateResponse("handoffs.html", {"request": request, "active": "handoffs"})
+
+
+@app.get("/dashboard/agents", response_class=HTMLResponse)
+def agents_page(request: Request):
+    return templates.TemplateResponse("agents.html", {"request": request, "active": "agents"})
+
+
+@app.get("/dashboard/knowledge", response_class=HTMLResponse)
+def knowledge_page(request: Request):
+    return templates.TemplateResponse("knowledge.html", {"request": request, "active": "knowledge"})

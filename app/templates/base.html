@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Dashboard{% endblock %} - AgentLense</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .sidebar-link.active { background-color: rgb(79 70 229); color: white; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="flex">
+        <!-- Sidebar -->
+        <aside class="w-64 bg-gray-900 min-h-screen fixed">
+            <div class="p-6">
+                <h1 class="text-xl font-bold text-white">AgentLense</h1>
+                <p class="text-gray-400 text-sm mt-1">Agent Dashboard</p>
+            </div>
+            <nav class="mt-4">
+                <a href="/dashboard" class="sidebar-link flex items-center px-6 py-3 text-gray-300 hover:bg-gray-800 hover:text-white transition {% if active == 'dashboard' %}active{% endif %}">
+                    <span class="mr-3">📊</span> Dashboard
+                </a>
+                <a href="/dashboard/conversations" class="sidebar-link flex items-center px-6 py-3 text-gray-300 hover:bg-gray-800 hover:text-white transition {% if active == 'conversations' %}active{% endif %}">
+                    <span class="mr-3">💬</span> Konusmalar
+                </a>
+                <a href="/dashboard/handoffs" class="sidebar-link flex items-center px-6 py-3 text-gray-300 hover:bg-gray-800 hover:text-white transition {% if active == 'handoffs' %}active{% endif %}">
+                    <span class="mr-3">🤝</span> Yonlendirmeler
+                </a>
+                <a href="/dashboard/agents" class="sidebar-link flex items-center px-6 py-3 text-gray-300 hover:bg-gray-800 hover:text-white transition {% if active == 'agents' %}active{% endif %}">
+                    <span class="mr-3">🤖</span> Agent Ayarlari
+                </a>
+                <a href="/dashboard/knowledge" class="sidebar-link flex items-center px-6 py-3 text-gray-300 hover:bg-gray-800 hover:text-white transition {% if active == 'knowledge' %}active{% endif %}">
+                    <span class="mr-3">📚</span> Bilgi Bankasi
+                </a>
+            </nav>
+            <div class="absolute bottom-4 left-0 right-0 px-6">
+                <div class="text-gray-500 text-xs">
+                    <p>WhatsApp: +905428078429</p>
+                    <p>Telegram: @kohphangan_inziva_bot</p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="ml-64 flex-1 p-8">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

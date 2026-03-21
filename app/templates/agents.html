@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Agent Ayarlari{% endblock %}
+
+{% block content %}
+<h2 class="text-2xl font-bold text-gray-800 mb-6">Agent Ayarlari</h2>
+
+<div id="agents-container" class="space-y-6">
+    <p class="text-gray-400">Yukleniyor...</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadAgents() {
+    const res = await fetch('/api/agents');
+    const agents = await res.json();
+
+    const container = document.getElementById('agents-container');
+    container.innerHTML = '';
+
+    agents.forEach(agent => {
+        container.innerHTML += `
+            <div class="bg-white rounded-xl shadow p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-700">${agent.name}</h3>
+                        <p class="text-sm text-gray-400">${agent.type} - ${agent.model}</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" ${agent.active ? 'checked' : ''} onchange="toggleAgent('${agent.type}', this.checked)" class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-200 peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                        <span class="ml-3 text-sm font-medium text-gray-700">${agent.active ? 'Aktif' : 'Pasif'}</span>
+                    </label>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-600 mb-2">System Prompt</label>
+                    <textarea id="prompt-${agent.type}" rows="10" class="w-full border rounded-lg p-3 text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none">${agent.system_prompt}</textarea>
+                </div>
+                <div class="mt-4 flex justify-end">
+                    <button onclick="saveAgent('${agent.type}')" class="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition">Kaydet</button>
+                </div>
+            </div>
+        `;
+    });
+}
+
+async function toggleAgent(type, active) {
+    await fetch(`/api/agents/${type}/config`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({active})
+    });
+}
+
+async function saveAgent(type) {
+    const prompt = document.getElementById(`prompt-${type}`).value;
+    const res = await fetch(`/api/agents/${type}/config`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({system_prompt: prompt})
+    });
+    if (res.ok) {
+        alert('Kaydedildi!');
+    }
+}
+
+loadAgents();
+</script>
+{% endblock %}

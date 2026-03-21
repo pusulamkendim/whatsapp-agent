@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Bilgi Bankasi{% endblock %}
+
+{% block content %}
+<h2 class="text-2xl font-bold text-gray-800 mb-6">Bilgi Bankasi</h2>
+
+<div class="bg-white rounded-xl shadow p-6">
+    <div class="flex items-center justify-between mb-4">
+        <p class="text-sm text-gray-400">retreat_docs/knowledge_base.md</p>
+        <button onclick="saveKnowledge()" class="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition">Kaydet</button>
+    </div>
+    <textarea id="kb-editor" rows="30" class="w-full border rounded-lg p-4 text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Yukleniyor..."></textarea>
+    <p id="kb-status" class="text-sm text-gray-400 mt-2"></p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadKnowledge() {
+    const res = await fetch('/api/knowledge');
+    const data = await res.json();
+    document.getElementById('kb-editor').value = data.content;
+    document.getElementById('kb-status').textContent = `${data.content.length} karakter`;
+}
+
+async function saveKnowledge() {
+    const content = document.getElementById('kb-editor').value;
+    const res = await fetch('/api/knowledge', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({content})
+    });
+    if (res.ok) {
+        document.getElementById('kb-status').textContent = 'Kaydedildi!';
+        setTimeout(() => {
+            document.getElementById('kb-status').textContent = `${content.length} karakter`;
+        }, 2000);
+    }
+}
+
+loadKnowledge();
+</script>
+{% endblock %}

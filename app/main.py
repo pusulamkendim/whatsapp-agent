@@ -7,6 +7,7 @@ from app.config import WHATSAPP_VERIFY_TOKEN
 from app.database import init_db, SessionLocal
 from app.whatsapp import send_message as wa_send, extract_message as wa_extract
 from app.telegram import send_message as tg_send, extract_message as tg_extract, setup_webhook as tg_setup_webhook
+from app.instagram import send_message as ig_send, extract_message as ig_extract
 from app.agent import chat as restaurant_chat
 from app.retreat_agent import chat as retreat_chat
 from app.models import Conversation, DailyStat
@@ -144,7 +145,8 @@ def process_message(sender: str, clean_text: str, agent_type: str, msg_id: str =
     save_message(sender, agent_type, "user", clean_text, msg_id)
 
     # Kanal bazlı mesaj gönderme
-    send_fn = wa_send if channel == "whatsapp" else tg_send
+    send_fns = {"whatsapp": wa_send, "telegram": tg_send, "instagram": ig_send}
+    send_fn = send_fns.get(channel, wa_send)
 
     try:
         if agent_type == "restaurant":
@@ -272,6 +274,69 @@ async def handle_telegram_webhook(request: Request, background_tasks: Background
     print(f"📩 [TG/{agent_type}] {chat_id} → {clean_text}")
 
     background_tasks.add_task(process_message, f"tg_{chat_id}", clean_text, agent_type, msg_id, "telegram")
+
+    return {"status": "ok"}
+
+
+@app.get("/instagram/webhook")
+def verify_instagram_webhook(
+    hub_mode: str = Query(None, alias="hub.mode"),
+    hub_verify_token: str = Query(None, alias="hub.verify_token"),
+    hub_challenge: str = Query(None, alias="hub.challenge"),
+):
+    """Instagram webhook doğrulaması (GET)"""
+    if hub_mode == "subscribe" and hub_verify_token == WHATSAPP_VERIFY_TOKEN:
+        print("✅ Instagram webhook doğrulandı!")
+        return PlainTextResponse(content=hub_challenge)
+    return PlainTextResponse(content="Forbidden", status_code=403)
+
+
+@app.post("/instagram/webhook")
+async def handle_instagram_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Gelen Instagram DM mesajlarını işle (sadece reklamdan gelenler)"""
+    payload = await request.json()
+
+    result = ig_extract(payload)
+    if not result:
+        return {"status": "ignored"}
+
+    sender_id, text, msg_id, is_from_ad = result
+    msg_id = f"ig_{msg_id}"
+
+    # Sadece reklamdan gelen mesajları işle
+    # İlk mesaj reklamdan geldiyse, o kullanıcıyı "ad_users" olarak kaydet
+    # Sonraki mesajları da işle (aynı konuşma devam ediyor)
+    ad_user_key = f"ig_{sender_id}"
+
+    if is_from_ad:
+        customer_agents[ad_user_key] = "retreat"  # Reklamdan gelen → retreat agent
+        print(f"📢 Instagram reklamdan mesaj: {sender_id}")
+    elif ad_user_key not in customer_agents:
+        # Reklamdan gelmeyen ve daha önce reklamdan da gelmemiş → atla
+        print(f"⏭️ Instagram organik mesaj atlandı: {sender_id}")
+        return {"status": "not_from_ad"}
+
+    # Duplicate kontrolü
+    if msg_id in processed_messages:
+        return {"status": "duplicate"}
+
+    if msg_id:
+        db_check = SessionLocal()
+        try:
+            existing = db_check.query(Conversation).filter(Conversation.msg_id == msg_id).first()
+            if existing:
+                processed_messages[msg_id] = True
+                return {"status": "duplicate"}
+        finally:
+            db_check.close()
+
+    processed_messages[msg_id] = True
+    if len(processed_messages) > MAX_PROCESSED:
+        processed_messages.popitem(last=False)
+
+    print(f"📩 [IG/retreat] {sender_id} → {text}")
+
+    background_tasks.add_task(process_message, ad_user_key, text, "retreat", msg_id, "instagram")
 
     return {"status": "ok"}
 

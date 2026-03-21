@@ -5,7 +5,8 @@ from fastapi import FastAPI, Request, Query, BackgroundTasks
 from fastapi.responses import PlainTextResponse
 from app.config import WHATSAPP_VERIFY_TOKEN
 from app.database import init_db, SessionLocal
-from app.whatsapp import send_message, extract_message
+from app.whatsapp import send_message as wa_send, extract_message as wa_extract
+from app.telegram import send_message as tg_send, extract_message as tg_extract, setup_webhook as tg_setup_webhook
 from app.agent import chat as restaurant_chat
 from app.retreat_agent import chat as retreat_chat
 from app.models import Conversation, DailyStat
@@ -42,7 +43,12 @@ def startup():
         import importlib, seed_menu
         seed_menu.seed()
     db.close()
-    print("✅ WhatsApp Multi-Agent başlatıldı!")
+    # Telegram webhook ayarla
+    import os
+    if os.getenv("TELEGRAM_BOT_TOKEN"):
+        base_url = os.getenv("BASE_URL", "https://agentapi.pusulamkendim.com")
+        tg_setup_webhook(f"{base_url}/telegram/webhook")
+    print("✅ Multi-Agent başlatıldı! (WhatsApp + Telegram)")
 
 
 @app.get("/webhook")
@@ -132,10 +138,13 @@ def save_message(sender: str, agent_type: str, role: str, message: str, msg_id: 
         db.close()
 
 
-def process_message(sender: str, clean_text: str, agent_type: str, msg_id: str = ""):
+def process_message(sender: str, clean_text: str, agent_type: str, msg_id: str = "", channel: str = "whatsapp"):
     """Mesajı arka planda işle"""
     # Kullanıcı mesajını kaydet
     save_message(sender, agent_type, "user", clean_text, msg_id)
+
+    # Kanal bazlı mesaj gönderme
+    send_fn = wa_send if channel == "whatsapp" else tg_send
 
     try:
         if agent_type == "restaurant":
@@ -152,11 +161,11 @@ def process_message(sender: str, clean_text: str, agent_type: str, msg_id: str =
         # Agent cevabını kaydet
         save_message(sender, agent_type, "agent", response)
 
-        print(f"🤖 [{agent_type}] Cevap: {response}")
-        send_message(sender, response)
+        print(f"🤖 [{agent_type}/{channel}] Cevap: {response}")
+        send_fn(sender, response)
     except Exception as e:
         print(f"❌ Hata: {e}")
-        send_message(sender, "Bir sorun oluştu, lütfen tekrar deneyin.")
+        send_fn(sender, "Bir sorun oluştu, lütfen tekrar deneyin.")
 
 
 @app.post("/webhook")
@@ -167,7 +176,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     # Raw payload logla (debug)
     print(f"📦 Webhook payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
-    result = extract_message(payload)
+    result = wa_extract(payload)
     if not result:
         return {"status": "ignored"}
 
@@ -214,7 +223,55 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     print(f"📩 [{agent_type}] {sender} → {clean_text}")
 
     # Hemen 200 dön, mesajı arka planda işle (Meta timeout'a takılmasın)
-    background_tasks.add_task(process_message, sender, clean_text, agent_type, msg_id)
+    background_tasks.add_task(process_message, sender, clean_text, agent_type, msg_id, "whatsapp")
+
+    return {"status": "ok"}
+
+
+@app.post("/telegram/webhook")
+async def handle_telegram_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Gelen Telegram mesajlarını işle"""
+    payload = await request.json()
+
+    result = tg_extract(payload)
+    if not result:
+        return {"status": "ignored"}
+
+    chat_id, text, msg_id = result
+    msg_id = f"tg_{msg_id}"  # WhatsApp msg_id ile karışmasın
+
+    # Duplicate kontrolü
+    if msg_id in processed_messages:
+        return {"status": "duplicate"}
+
+    if msg_id:
+        db_check = SessionLocal()
+        try:
+            existing = db_check.query(Conversation).filter(Conversation.msg_id == msg_id).first()
+            if existing:
+                processed_messages[msg_id] = True
+                return {"status": "duplicate"}
+        finally:
+            db_check.close()
+
+    processed_messages[msg_id] = True
+    if len(processed_messages) > MAX_PROCESSED:
+        processed_messages.popitem(last=False)
+
+    agent_type = detect_agent(f"tg_{chat_id}", text)
+
+    clean_text = text
+    first_word = text.strip().upper().split()[0] if text.strip() else ""
+    for code in AGENT_CODES:
+        if first_word.startswith(code):
+            clean_text = text[len(first_word):].strip()
+            if not clean_text:
+                clean_text = "Merhaba"
+            break
+
+    print(f"📩 [TG/{agent_type}] {chat_id} → {clean_text}")
+
+    background_tasks.add_task(process_message, f"tg_{chat_id}", clean_text, agent_type, msg_id, "telegram")
 
     return {"status": "ok"}
 

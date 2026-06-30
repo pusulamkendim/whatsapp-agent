@@ -75,7 +75,7 @@ def _ensure_postgres_conversation_columns():
 
 def _seed_platform_defaults():
     import os
-    from app.models import Agent, ChannelAccount, Route
+    from app.models import Agent, AgentKnowledgeBase, ChannelAccount, KnowledgeBase, KnowledgeDocument, Route
     from app.config import WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_VERIFY_TOKEN
 
     db = SessionLocal()
@@ -103,6 +103,7 @@ def _seed_platform_defaults():
             db.add(restaurant)
 
         db.flush()
+        _ensure_default_knowledge_base(db, retreat)
 
         def ensure_default_routes(channel_account: ChannelAccount):
             defaults = [
@@ -192,3 +193,44 @@ def _seed_platform_defaults():
         print(f"⚠️ Platform default seed hatası: {exc}")
     finally:
         db.close()
+
+
+def _ensure_default_knowledge_base(db, retreat_agent):
+    from pathlib import Path
+    from app.models import AgentKnowledgeBase, KnowledgeBase, KnowledgeDocument
+
+    kb = db.query(KnowledgeBase).filter(KnowledgeBase.slug == "retreat-default").first()
+    if not kb:
+        kb = KnowledgeBase(
+            slug="retreat-default",
+            name="Retreat Knowledge",
+            description="Samma Karuna inziva dokumanlari",
+            active=True,
+        )
+        db.add(kb)
+        db.flush()
+
+    if db.query(KnowledgeDocument).filter(KnowledgeDocument.knowledge_base_id == kb.id).count() == 0:
+        kb_path = Path(__file__).resolve().parent.parent / "retreat_docs" / "knowledge_base.md"
+        content = kb_path.read_text(encoding="utf-8") if kb_path.exists() else ""
+        if content:
+            db.add(KnowledgeDocument(
+                knowledge_base_id=kb.id,
+                filename="knowledge_base.md",
+                content_type="text/markdown",
+                content=content,
+                source_type="seed",
+                active=True,
+            ))
+
+    link = db.query(AgentKnowledgeBase).filter(
+        AgentKnowledgeBase.agent_id == retreat_agent.id,
+        AgentKnowledgeBase.knowledge_base_id == kb.id,
+    ).first()
+    if not link:
+        db.add(AgentKnowledgeBase(
+            agent_id=retreat_agent.id,
+            knowledge_base_id=kb.id,
+            priority=100,
+            active=True,
+        ))

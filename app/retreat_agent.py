@@ -120,8 +120,14 @@ def execute_handoff(customer_phone: str, customer_name: str, summary: str, inter
     return "Bilgiler ekibe iletildi."
 
 
-def chat(customer_id: str, message: str) -> str:
+def chat(customer_id: str, message: str, knowledge_base: str | None = None, system_prompt: str | None = None) -> str:
     """İnziva sorusunu yanıtla"""
+    if system_prompt:
+        prompt = system_prompt
+    elif knowledge_base:
+        prompt = build_system_prompt(knowledge_base)
+    else:
+        prompt = SYSTEM_PROMPT
 
     if customer_id not in conversations:
         conversations[customer_id] = []
@@ -137,7 +143,7 @@ def chat(customer_id: str, message: str) -> str:
         model="gemini-2.5-flash",
         contents=history,
         config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
+            system_instruction=prompt,
             tools=[tool_definitions],
             temperature=0.7,
         ),
@@ -191,7 +197,7 @@ def chat(customer_id: str, message: str) -> str:
             model="gemini-2.5-flash",
             contents=history,
             config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
+                system_instruction=prompt,
                 tools=[tool_definitions],
                 temperature=0.7,
             ),

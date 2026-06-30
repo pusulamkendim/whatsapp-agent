@@ -3,11 +3,13 @@ import os
 import hmac
 import hashlib
 import secrets
+import re
 from collections import OrderedDict
 from datetime import date
-from fastapi import FastAPI, Request, Query, BackgroundTasks
+from fastapi import FastAPI, Request, Query, BackgroundTasks, UploadFile, File
 from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from app.config import WHATSAPP_VERIFY_TOKEN
 from app.database import init_db, SessionLocal
 from app.whatsapp import send_message as wa_send, extract_message as wa_extract
@@ -15,7 +17,17 @@ from app.telegram import send_message as tg_send, extract_message as tg_extract,
 from app.instagram import send_message as ig_send, extract_message as ig_extract
 from app import retreat_agent
 from app.agent_registry import run_agent
-from app.models import Agent, ChannelAccount, Conversation, DailyStat, Handoff, Route
+from app.models import (
+    Agent,
+    AgentKnowledgeBase,
+    ChannelAccount,
+    Conversation,
+    DailyStat,
+    Handoff,
+    KnowledgeBase,
+    KnowledgeDocument,
+    Route,
+)
 from app.router import find_channel_account, resolve_route
 
 app = FastAPI(title="WhatsApp Multi-Agent")
@@ -49,7 +61,7 @@ def startup():
         try:
             tg_setup_webhook(f"{base_url}/telegram/webhook")
         except Exception as exc:
-            print(f"⚠️ Telegram webhook ayarlanamadı: {exc}")
+            print(f"⚠️ Telegram webhook ayarlanamadı: {type(exc).__name__}")
     if not ADMIN_SECRET:
         message = "production'da dashboard/API kilitli" if IS_PRODUCTION else "dashboard/API auth devre dışı"
         print(f"⚠️ ADMIN_PASSWORD/ADMIN_TOKEN yok; {message}.")
@@ -728,6 +740,48 @@ def _mask_credentials(credentials_json: str | None) -> str:
     return json.dumps(masked, ensure_ascii=False)
 
 
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower()).strip("-")
+    return slug or secrets.token_hex(4)
+
+
+def _knowledge_base_payload(kb: KnowledgeBase) -> dict:
+    active_docs = [doc for doc in kb.documents if doc.active]
+    active_links = [link for link in kb.agent_links if link.active and link.agent]
+    return {
+        "id": kb.id,
+        "slug": kb.slug,
+        "name": kb.name,
+        "description": kb.description or "",
+        "active": kb.active,
+        "document_count": len(active_docs),
+        "character_count": sum(len(doc.content or "") for doc in active_docs),
+        "agents": [{
+            "id": link.agent.id,
+            "slug": link.agent.slug,
+            "name": link.agent.name,
+            "priority": link.priority,
+        } for link in sorted(active_links, key=lambda item: (item.priority or 100, item.id))],
+        "created_at": kb.created_at.isoformat() if kb.created_at else "",
+        "updated_at": kb.updated_at.isoformat() if kb.updated_at else "",
+    }
+
+
+def _document_payload(doc: KnowledgeDocument) -> dict:
+    return {
+        "id": doc.id,
+        "knowledge_base_id": doc.knowledge_base_id,
+        "filename": doc.filename,
+        "content_type": doc.content_type,
+        "source_type": doc.source_type,
+        "active": doc.active,
+        "character_count": len(doc.content or ""),
+        "preview": (doc.content or "")[:280],
+        "created_at": doc.created_at.isoformat() if doc.created_at else "",
+        "updated_at": doc.updated_at.isoformat() if doc.updated_at else "",
+    }
+
+
 @app.get("/api/channels")
 def get_channels():
     db = SessionLocal()
@@ -901,29 +955,273 @@ async def simulate_route(request: Request):
         db.close()
 
 
+@app.get("/api/knowledge-bases")
+def list_knowledge_bases():
+    try:
+        return _list_knowledge_bases()
+    except (OperationalError, ProgrammingError):
+        init_db()
+        return _list_knowledge_bases()
+
+
+def _list_knowledge_bases():
+    db = SessionLocal()
+    try:
+        bases = db.query(KnowledgeBase).order_by(KnowledgeBase.active.desc(), KnowledgeBase.id.asc()).all()
+        return [_knowledge_base_payload(kb) for kb in bases]
+    finally:
+        db.close()
+
+
+@app.post("/api/knowledge-bases")
+async def create_knowledge_base(request: Request):
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "name_required"}, status_code=400)
+
+    db = SessionLocal()
+    try:
+        base_slug = _slugify(data.get("slug") or name)
+        slug = base_slug
+        suffix = 2
+        while db.query(KnowledgeBase).filter(KnowledgeBase.slug == slug).first():
+            slug = f"{base_slug}-{suffix}"
+            suffix += 1
+
+        kb = KnowledgeBase(
+            slug=slug,
+            name=name,
+            description=data.get("description", ""),
+            active=data.get("active", True),
+        )
+        db.add(kb)
+        db.commit()
+        db.refresh(kb)
+        return {"ok": True, "knowledge_base": _knowledge_base_payload(kb)}
+    finally:
+        db.close()
+
+
+@app.put("/api/knowledge-bases/{kb_id}")
+async def update_knowledge_base(kb_id: int, request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        if not kb:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        for field in ["name", "description", "active"]:
+            if field in data:
+                setattr(kb, field, data[field])
+        db.commit()
+        db.refresh(kb)
+        return {"ok": True, "knowledge_base": _knowledge_base_payload(kb)}
+    finally:
+        db.close()
+
+
+@app.delete("/api/knowledge-bases/{kb_id}")
+def delete_knowledge_base(kb_id: int):
+    db = SessionLocal()
+    try:
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        if not kb:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        kb.active = False
+        db.query(AgentKnowledgeBase).filter(AgentKnowledgeBase.knowledge_base_id == kb.id).update({"active": False})
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/knowledge-bases/{kb_id}/documents")
+def list_knowledge_documents(kb_id: int):
+    db = SessionLocal()
+    try:
+        docs = db.query(KnowledgeDocument).filter(
+            KnowledgeDocument.knowledge_base_id == kb_id,
+            KnowledgeDocument.active == True,
+        ).order_by(KnowledgeDocument.id.asc()).all()
+        return [_document_payload(doc) for doc in docs]
+    finally:
+        db.close()
+
+
+@app.post("/api/knowledge-bases/{kb_id}/documents")
+async def upload_knowledge_documents(kb_id: int, files: list[UploadFile] = File(...)):
+    max_bytes = 2 * 1024 * 1024
+    allowed_extensions = {".txt", ".md", ".markdown", ".csv", ".json"}
+    db = SessionLocal()
+    try:
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id, KnowledgeBase.active == True).first()
+        if not kb:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+
+        created = []
+        for upload in files:
+            filename = os.path.basename(upload.filename or "document.txt")
+            extension = os.path.splitext(filename)[1].lower()
+            if extension and extension not in allowed_extensions:
+                return JSONResponse({"error": "unsupported_file_type", "filename": filename}, status_code=400)
+
+            raw = await upload.read()
+            if len(raw) > max_bytes:
+                return JSONResponse({"error": "file_too_large", "filename": filename}, status_code=400)
+
+            content = raw.decode("utf-8", errors="replace").strip()
+            if not content:
+                continue
+
+            doc = KnowledgeDocument(
+                knowledge_base_id=kb.id,
+                filename=filename,
+                content_type=upload.content_type or "text/plain",
+                content=content,
+                source_type="upload",
+                active=True,
+            )
+            db.add(doc)
+            db.flush()
+            created.append(_document_payload(doc))
+
+        db.commit()
+        return {"ok": True, "documents": created}
+    finally:
+        db.close()
+
+
+@app.post("/api/knowledge-bases/{kb_id}/documents/text")
+async def create_knowledge_text_document(kb_id: int, request: Request):
+    data = await request.json()
+    content = (data.get("content") or "").strip()
+    if not content:
+        return JSONResponse({"error": "content_required"}, status_code=400)
+
+    db = SessionLocal()
+    try:
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id, KnowledgeBase.active == True).first()
+        if not kb:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        doc = KnowledgeDocument(
+            knowledge_base_id=kb.id,
+            filename=data.get("filename") or "manual-note.md",
+            content_type="text/markdown",
+            content=content,
+            source_type="manual",
+            active=True,
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+        return {"ok": True, "document": _document_payload(doc)}
+    finally:
+        db.close()
+
+
+@app.delete("/api/knowledge-documents/{document_id}")
+def delete_knowledge_document(document_id: int):
+    db = SessionLocal()
+    try:
+        doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        if not doc:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        doc.active = False
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.put("/api/knowledge-bases/{kb_id}/agents")
+async def update_knowledge_agents(kb_id: int, request: Request):
+    data = await request.json()
+    agent_ids = {int(agent_id) for agent_id in data.get("agent_ids", [])}
+    db = SessionLocal()
+    try:
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        if not kb:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+
+        existing = db.query(AgentKnowledgeBase).filter(AgentKnowledgeBase.knowledge_base_id == kb.id).all()
+        links_by_agent = {link.agent_id: link for link in existing}
+        for link in existing:
+            link.active = False
+
+        for index, agent_id in enumerate(sorted(agent_ids)):
+            if not db.query(Agent).filter(Agent.id == agent_id).first():
+                continue
+            link = links_by_agent.get(agent_id)
+            if link:
+                link.active = True
+                link.priority = 100 + index
+            else:
+                db.add(AgentKnowledgeBase(
+                    agent_id=agent_id,
+                    knowledge_base_id=kb.id,
+                    priority=100 + index,
+                    active=True,
+                ))
+
+        db.commit()
+        db.refresh(kb)
+        return {"ok": True, "knowledge_base": _knowledge_base_payload(kb)}
+    finally:
+        db.close()
+
+
 @app.get("/api/knowledge")
 def get_knowledge():
-    """Knowledge base içeriği"""
-    kb_path = os.path.join(os.path.dirname(__file__), "..", "retreat_docs", "knowledge_base.md")
+    """Legacy endpoint: default retreat knowledge içeriği."""
+    db = SessionLocal()
     try:
-        with open(kb_path, "r", encoding="utf-8") as f:
-            return {"content": f.read()}
-    except FileNotFoundError:
-        return {"content": ""}
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.slug == "retreat-default").first()
+        if not kb:
+            return {"content": ""}
+        docs = db.query(KnowledgeDocument).filter(
+            KnowledgeDocument.knowledge_base_id == kb.id,
+            KnowledgeDocument.active == True,
+        ).order_by(KnowledgeDocument.id.asc()).all()
+        return {"content": "\n\n---\n\n".join(doc.content for doc in docs)}
+    finally:
+        db.close()
 
 
 @app.put("/api/knowledge")
 async def update_knowledge(request: Request):
-    """Knowledge base güncelle"""
+    """Legacy endpoint: default retreat knowledge manuel dokümanına yazar."""
     data = await request.json()
-    kb_path = os.path.join(os.path.dirname(__file__), "..", "retreat_docs", "knowledge_base.md")
-    with open(kb_path, "w", encoding="utf-8") as f:
-        f.write(data["content"])
-    # Retreat agent'ın system prompt'unu yeniden yükle
-    with open(kb_path, "r", encoding="utf-8") as f:
-        retreat_agent.KNOWLEDGE_BASE = f.read()
-    retreat_agent.SYSTEM_PROMPT = retreat_agent.build_system_prompt(retreat_agent.KNOWLEDGE_BASE)
-    return {"ok": True}
+    db = SessionLocal()
+    try:
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.slug == "retreat-default").first()
+        if not kb:
+            kb = KnowledgeBase(slug="retreat-default", name="Retreat Knowledge", active=True)
+            db.add(kb)
+            db.flush()
+        doc = db.query(KnowledgeDocument).filter(
+            KnowledgeDocument.knowledge_base_id == kb.id,
+            KnowledgeDocument.filename == "legacy-editor.md",
+        ).first()
+        if not doc:
+            doc = KnowledgeDocument(
+                knowledge_base_id=kb.id,
+                filename="legacy-editor.md",
+                content_type="text/markdown",
+                content=data["content"],
+                source_type="manual",
+                active=True,
+            )
+            db.add(doc)
+        else:
+            doc.content = data["content"]
+            doc.active = True
+        db.commit()
+        retreat_agent.KNOWLEDGE_BASE = data["content"]
+        retreat_agent.SYSTEM_PROMPT = retreat_agent.build_system_prompt(retreat_agent.KNOWLEDGE_BASE)
+        return {"ok": True}
+    finally:
+        db.close()
 
 
 # ============ DASHBOARD ROUTES ============

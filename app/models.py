@@ -36,6 +36,7 @@ class Agent(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     routes = relationship("Route", back_populates="agent")
+    knowledge_links = relationship("AgentKnowledgeBase", back_populates="agent")
 
 
 class Route(Base):
@@ -51,6 +52,52 @@ class Route(Base):
 
     channel_account = relationship("ChannelAccount", back_populates="routes")
     agent = relationship("Agent", back_populates="routes")
+
+
+class KnowledgeBase(Base):
+    __tablename__ = "knowledge_bases"
+
+    id = Column(Integer, primary_key=True)
+    slug = Column(String, nullable=False, unique=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, default="")
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    documents = relationship("KnowledgeDocument", back_populates="knowledge_base")
+    agent_links = relationship("AgentKnowledgeBase", back_populates="knowledge_base")
+
+
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+
+    id = Column(Integer, primary_key=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    filename = Column(String, nullable=False)
+    content_type = Column(String, default="text/plain")
+    content = Column(Text, nullable=False)
+    source_type = Column(String, default="upload")
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    knowledge_base = relationship("KnowledgeBase", back_populates="documents")
+
+
+class AgentKnowledgeBase(Base):
+    __tablename__ = "agent_knowledge_bases"
+
+    id = Column(Integer, primary_key=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=False, index=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    priority = Column(Integer, default=100)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    agent = relationship("Agent", back_populates="knowledge_links")
+    knowledge_base = relationship("KnowledgeBase", back_populates="agent_links")
 
 
 class Restaurant(Base):

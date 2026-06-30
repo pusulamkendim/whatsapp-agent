@@ -2,42 +2,373 @@
 {% block title %}Bilgi Bankasi{% endblock %}
 
 {% block content %}
-<h2 class="text-2xl font-bold text-gray-800 mb-6">Bilgi Bankasi</h2>
-
-<div class="bg-white rounded-xl shadow p-6">
-    <div class="flex items-center justify-between mb-4">
-        <p class="text-sm text-gray-400">retreat_docs/knowledge_base.md</p>
-        <button onclick="saveKnowledge()" class="btn-primary btn-icon px-5 py-2"><i data-lucide="save"></i>Kaydet</button>
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h2 class="text-xl font-semibold text-slate-900">Bilgi Bankasi</h2>
+        <p class="text-slate-500 mt-1">Dokumanlari bilgi bankalarinda topla, agentlara paylastir.</p>
     </div>
-    <textarea id="kb-editor" rows="30" class="w-full border rounded-lg p-4 text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Yukleniyor..."></textarea>
-    <p id="kb-status" class="text-sm text-gray-400 mt-2"></p>
+    <button onclick="openBaseDialog()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni bilgi bankasi</button>
 </div>
+
+<div class="grid grid-cols-1 xl:grid-cols-[320px_minmax(0,1fr)] gap-6">
+    <aside class="bg-white p-3">
+        <div class="px-2 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wide">Knowledge bases</div>
+        <div id="kbList" class="space-y-1"></div>
+    </aside>
+
+    <section id="kbDetail" class="bg-white p-6 min-h-[620px]">
+        <div class="h-full grid place-items-center text-center text-slate-500">
+            <div>
+                <i data-lucide="book-open" class="w-8 h-8 mx-auto mb-3 text-slate-400"></i>
+                <p>Bir bilgi bankasi sec veya yeni olustur.</p>
+            </div>
+        </div>
+    </section>
+</div>
+
+<dialog id="baseDialog" class="rounded-lg w-full max-w-xl p-0 backdrop:bg-slate-950/50">
+    <form id="baseForm" class="bg-white p-6 space-y-4">
+        <div class="flex items-start justify-between">
+            <h3 class="text-base font-semibold">Yeni bilgi bankasi</h3>
+            <button type="button" onclick="baseDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
+        </div>
+        <p id="baseFormError" class="hidden rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+        <label class="space-y-1 block">
+            <span class="text-sm font-medium">Ad</span>
+            <input id="baseName" class="w-full border px-3 py-2" placeholder="Retreat Knowledge">
+        </label>
+        <label class="space-y-1 block">
+            <span class="text-sm font-medium">Aciklama</span>
+            <textarea id="baseDescription" rows="3" class="w-full border px-3 py-2" placeholder="Bu bilgi bankasi hangi icerikleri tasir?"></textarea>
+        </label>
+        <label class="space-y-1 block">
+            <span class="text-sm font-medium">Dokumanlar</span>
+            <span class="flex items-center justify-between gap-3 border border-dashed border-slate-300 rounded-2xl px-4 py-4 cursor-pointer hover:bg-slate-50">
+                <span class="min-w-0">
+                    <span class="block font-medium">Dosya sec</span>
+                    <span id="baseFileSummary" class="block text-xs text-slate-500 mt-1 truncate">txt, md, csv, json · birden fazla dosya</span>
+                </span>
+                <i data-lucide="upload" class="w-5 h-5 text-slate-500"></i>
+                <input id="baseFiles" type="file" multiple class="hidden" accept=".txt,.md,.markdown,.csv,.json" onchange="showBaseSelectedFiles()">
+            </span>
+        </label>
+        <div class="flex justify-end gap-2 pt-2">
+            <button type="button" onclick="baseDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
+            <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Olustur</button>
+        </div>
+    </form>
+</dialog>
 {% endblock %}
 
 {% block scripts %}
 <script>
-async function loadKnowledge() {
-    const res = await fetch('/api/knowledge');
-    const data = await res.json();
-    document.getElementById('kb-editor').value = data.content;
-    document.getElementById('kb-status').textContent = `${data.content.length} karakter`;
+let bases = [];
+let agents = [];
+let documents = [];
+let selectedBaseId = null;
+
+async function api(path, options = {}) {
+    const res = await fetch(path, options);
+    if (res.status === 401) location.href = '/login';
+    return res;
 }
 
-async function saveKnowledge() {
-    const content = document.getElementById('kb-editor').value;
-    const res = await fetch('/api/knowledge', {
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+
+function formatCount(value, suffix) {
+    return `${Number(value || 0).toLocaleString('tr-TR')} ${suffix}`;
+}
+
+async function loadAll(preferredId = selectedBaseId) {
+    const [kbRes, agentRes] = await Promise.all([
+        api('/api/knowledge-bases'),
+        api('/api/agents')
+    ]);
+    if (!kbRes.ok || !agentRes.ok) {
+        const failed = !kbRes.ok ? kbRes : agentRes;
+        let detail = '';
+        try {
+            detail = await failed.text();
+        } catch (error) {
+            detail = 'Cevap okunamadi.';
+        }
+        const summary = `${failed.url.split(location.origin).pop()} HTTP ${failed.status}`;
+        kbList.innerHTML = `
+            <div class="rounded-xl bg-red-50 px-3 py-3 text-sm text-red-700">
+                Bilgi bankalari yuklenemedi.<br>
+                <span class="text-xs">${escapeHtml(summary)}</span>
+            </div>
+        `;
+        kbDetail.innerHTML = `
+            <div class="h-full grid place-items-center text-center text-red-700">
+                <div class="max-w-2xl">
+                    <i data-lucide="triangle-alert" class="w-8 h-8 mx-auto mb-3"></i>
+                    <p>API hatasi olustu.</p>
+                    <pre class="mt-4 max-h-48 overflow-auto rounded-2xl bg-red-50 p-4 text-left text-xs text-red-800">${escapeHtml(detail.slice(0, 1200))}</pre>
+                </div>
+            </div>
+        `;
+        if (window.lucide) window.lucide.createIcons();
+        return;
+    }
+    bases = await kbRes.json();
+    agents = await agentRes.json();
+    selectedBaseId = preferredId && bases.some(kb => kb.id === preferredId) ? preferredId : bases[0]?.id;
+    renderList();
+    if (selectedBaseId) await loadDetail(selectedBaseId);
+    else renderEmpty();
+}
+
+function renderList() {
+    if (!bases.length) {
+        kbList.innerHTML = `
+            <div class="rounded-xl border border-dashed border-slate-300 px-3 py-4 text-sm text-slate-500">
+                Henuz bilgi bankasi yok. Yeni bilgi bankasi olustururken dosyalarini da ekleyebilirsin.
+            </div>
+        `;
+        return;
+    }
+    kbList.innerHTML = bases.map(kb => {
+        const active = kb.id === selectedBaseId;
+        return `
+            <button onclick="loadDetail(${kb.id})" class="w-full text-left px-3 py-3 rounded-xl ${active ? 'bg-slate-100' : 'bg-white hover:bg-slate-50'} border-0">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="font-semibold text-slate-900 truncate">${escapeHtml(kb.name)}</div>
+                        <div class="text-xs text-slate-500 mt-1">${formatCount(kb.document_count, 'dosya')} · ${formatCount(kb.character_count, 'karakter')}</div>
+                    </div>
+                    <span class="text-xs px-2 py-1 rounded-full ${kb.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}">${kb.active ? 'Aktif' : 'Pasif'}</span>
+                </div>
+            </button>
+        `;
+    }).join('');
+}
+
+function renderEmpty() {
+    kbDetail.innerHTML = `
+        <div class="h-full grid place-items-center text-center text-slate-500">
+            <div>
+                <i data-lucide="book-open" class="w-8 h-8 mx-auto mb-3 text-slate-400"></i>
+                <p>Bir bilgi bankasi sec veya yeni olustur.</p>
+            </div>
+        </div>
+    `;
+    if (window.lucide) window.lucide.createIcons();
+}
+
+async function loadDetail(id) {
+    selectedBaseId = id;
+    renderList();
+    documents = await (await api(`/api/knowledge-bases/${id}/documents`)).json();
+    const kb = bases.find(item => item.id === id);
+    if (!kb) return renderEmpty();
+    const selectedAgentIds = new Set(kb.agents.map(agent => agent.id));
+
+    kbDetail.innerHTML = `
+        <div class="flex items-start justify-between gap-4 mb-6">
+            <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                    <h3 class="text-lg font-semibold text-slate-900">${escapeHtml(kb.name)}</h3>
+                    <span class="text-xs px-2 py-1 rounded-full ${kb.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}">${kb.active ? 'Aktif' : 'Pasif'}</span>
+                </div>
+                <p class="text-sm text-slate-500 mt-1">${escapeHtml(kb.description || 'Aciklama yok')}</p>
+            </div>
+            <div class="flex items-center gap-2">
+                <button onclick="toggleBaseActive(${kb.id}, ${!kb.active})" class="icon-btn" title="${kb.active ? 'Pasife al' : 'Aktif et'}" aria-label="${kb.active ? 'Pasife al' : 'Aktif et'}"><i data-lucide="${kb.active ? 'pause' : 'play'}"></i></button>
+                <button onclick="deleteBase(${kb.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
+            <section class="border border-slate-200 rounded-2xl p-4">
+                <div class="flex items-center gap-2 mb-3">
+                    <i data-lucide="bot" class="w-4 h-4 text-slate-500"></i>
+                    <h4 class="font-semibold">Agent baglantilari</h4>
+                </div>
+                <div class="space-y-2">
+                    ${agents.map(agent => `
+                        <label class="flex items-center justify-between gap-3 rounded-xl px-3 py-2 hover:bg-slate-50">
+                            <span>
+                                <span class="block font-medium">${escapeHtml(agent.name)}</span>
+                                <span class="block text-xs text-slate-500">${escapeHtml(agent.slug)} · ${escapeHtml(agent.type)}</span>
+                            </span>
+                            <input type="checkbox" class="agent-check rounded" value="${agent.id}" ${selectedAgentIds.has(agent.id) ? 'checked' : ''}>
+                        </label>
+                    `).join('')}
+                </div>
+                <button onclick="saveAgentLinks()" class="btn-secondary btn-icon px-4 py-2 mt-4"><i data-lucide="link"></i>Baglantilari kaydet</button>
+            </section>
+
+            <section class="border border-slate-200 rounded-2xl p-4">
+                <div class="flex items-center gap-2 mb-3">
+                    <i data-lucide="upload" class="w-4 h-4 text-slate-500"></i>
+                    <h4 class="font-semibold">Dosya ekle</h4>
+                </div>
+                <label class="block border border-dashed border-slate-300 rounded-2xl px-4 py-6 text-center cursor-pointer hover:bg-slate-50">
+                    <input id="fileInput" type="file" multiple class="hidden" accept=".txt,.md,.markdown,.csv,.json" onchange="showSelectedFiles()">
+                    <i data-lucide="files" class="w-6 h-6 mx-auto text-slate-400 mb-2"></i>
+                    <span class="block font-medium">Birden fazla dosya sec</span>
+                    <span id="fileSummary" class="block text-xs text-slate-500 mt-1">txt, md, csv, json · dosya basi 2 MB</span>
+                </label>
+                <button onclick="uploadFiles()" class="btn-primary btn-icon px-4 py-2 mt-4"><i data-lucide="upload-cloud"></i>Yukle</button>
+            </section>
+        </div>
+
+        <section class="border border-slate-200 rounded-2xl p-4 mb-6">
+            <div class="flex items-center gap-2 mb-3">
+                <i data-lucide="file-pen-line" class="w-4 h-4 text-slate-500"></i>
+                <h4 class="font-semibold">Manuel not</h4>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_auto] gap-3">
+                <input id="manualFilename" class="border px-3 py-2" value="manual-note.md">
+                <textarea id="manualContent" rows="3" class="border px-3 py-2 font-mono text-xs" placeholder="Kisa bilgi, fiyat notu, kampanya metni..."></textarea>
+                <button onclick="addManualDocument()" class="btn-secondary btn-icon px-4 py-2 self-start"><i data-lucide="plus"></i>Ekle</button>
+            </div>
+        </section>
+
+        <section>
+            <div class="flex items-center justify-between mb-3">
+                <h4 class="font-semibold">Dokumanlar</h4>
+                <span class="text-sm text-slate-500">${formatCount(documents.length, 'dosya')}</span>
+            </div>
+            <div class="border border-slate-200 rounded-2xl overflow-hidden">
+                ${documents.length ? documents.map(doc => `
+                    <div class="grid grid-cols-[minmax(0,1fr)_120px_44px] gap-3 items-center px-4 py-3 border-b border-slate-100 last:border-b-0">
+                        <div class="min-w-0">
+                            <div class="font-medium truncate">${escapeHtml(doc.filename)}</div>
+                            <div class="text-xs text-slate-500 mt-1">${escapeHtml(doc.content_type || 'text/plain')} · ${formatCount(doc.character_count, 'karakter')} · ${escapeHtml(doc.source_type)}</div>
+                            <p class="text-xs text-slate-500 mt-2 line-clamp-2">${escapeHtml(doc.preview)}</p>
+                        </div>
+                        <span class="text-xs text-slate-500">${new Date(doc.created_at).toLocaleDateString('tr-TR')}</span>
+                        <button onclick="deleteDocument(${doc.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
+                    </div>
+                `).join('') : `
+                    <div class="px-4 py-10 text-center text-slate-500">
+                        <i data-lucide="file-x" class="w-7 h-7 mx-auto mb-2 text-slate-400"></i>
+                        <p>Henuz dokuman yok.</p>
+                    </div>
+                `}
+            </div>
+        </section>
+    `;
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function openBaseDialog() {
+    baseName.value = 'Retreat Knowledge';
+    baseDescription.value = '';
+    baseFiles.value = '';
+    baseFileSummary.textContent = 'txt, md, csv, json · birden fazla dosya';
+    baseFormError.classList.add('hidden');
+    baseFormError.textContent = '';
+    baseDialog.showModal();
+    if (window.lucide) window.lucide.createIcons();
+}
+
+baseForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    baseFormError.classList.add('hidden');
+    baseFormError.textContent = '';
+    if (!baseName.value.trim()) {
+        baseFormError.textContent = 'Bilgi bankasi adi zorunlu.';
+        baseFormError.classList.remove('hidden');
+        baseName.focus();
+        return;
+    }
+    const res = await api('/api/knowledge-bases', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: baseName.value, description: baseDescription.value})
+    });
+    const data = await res.json();
+    if (!res.ok) {
+        baseFormError.textContent = data.error || 'Bilgi bankasi olusturulamadi.';
+        baseFormError.classList.remove('hidden');
+        return;
+    }
+    baseDialog.close();
+    if (data.knowledge_base?.id && baseFiles.files.length) {
+        const uploadRes = await uploadFilesForBase(data.knowledge_base.id, Array.from(baseFiles.files));
+        if (!uploadRes.ok) {
+            alert(JSON.stringify(await uploadRes.json()));
+        }
+    }
+    await loadAll(data.knowledge_base?.id);
+});
+
+function showBaseSelectedFiles() {
+    const files = Array.from(baseFiles.files || []);
+    baseFileSummary.textContent = files.length ? files.map(file => file.name).join(', ') : 'txt, md, csv, json · birden fazla dosya';
+}
+
+async function toggleBaseActive(id, active) {
+    await api(`/api/knowledge-bases/${id}`, {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({content})
+        body: JSON.stringify({active})
     });
-    if (res.ok) {
-        document.getElementById('kb-status').textContent = 'Kaydedildi!';
-        setTimeout(() => {
-            document.getElementById('kb-status').textContent = `${content.length} karakter`;
-        }, 2000);
-    }
+    await loadAll(id);
 }
 
-loadKnowledge();
+async function deleteBase(id) {
+    if (!confirm('Bilgi bankasi pasife alinsin mi? Agent baglantilari da pasife alinir.')) return;
+    await api(`/api/knowledge-bases/${id}`, {method: 'DELETE'});
+    await loadAll();
+}
+
+async function saveAgentLinks() {
+    const agent_ids = Array.from(document.querySelectorAll('.agent-check:checked')).map(input => Number(input.value));
+    await api(`/api/knowledge-bases/${selectedBaseId}/agents`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({agent_ids})
+    });
+    await loadAll(selectedBaseId);
+}
+
+function showSelectedFiles() {
+    const files = Array.from(fileInput.files || []);
+    fileSummary.textContent = files.length ? files.map(file => file.name).join(', ') : 'txt, md, csv, json · dosya basi 2 MB';
+}
+
+async function uploadFiles() {
+    const files = Array.from(fileInput.files || []);
+    if (!files.length) return;
+    const res = await uploadFilesForBase(selectedBaseId, files);
+    if (!res.ok) {
+        alert(JSON.stringify(await res.json()));
+        return;
+    }
+    await loadAll(selectedBaseId);
+}
+
+async function uploadFilesForBase(baseId, files) {
+    const form = new FormData();
+    files.forEach(file => form.append('files', file));
+    return api(`/api/knowledge-bases/${baseId}/documents`, {
+        method: 'POST',
+        body: form
+    });
+}
+
+async function addManualDocument() {
+    if (!manualContent.value.trim()) return;
+    await api(`/api/knowledge-bases/${selectedBaseId}/documents/text`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filename: manualFilename.value, content: manualContent.value})
+    });
+    await loadAll(selectedBaseId);
+}
+
+async function deleteDocument(id) {
+    if (!confirm('Dokuman silinsin mi?')) return;
+    await api(`/api/knowledge-documents/${id}`, {method: 'DELETE'});
+    await loadAll(selectedBaseId);
+}
+
+loadAll();
 </script>
 {% endblock %}

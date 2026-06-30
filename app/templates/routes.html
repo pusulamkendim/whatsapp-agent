@@ -4,10 +4,10 @@
 {% block content %}
 <div class="flex items-center justify-between mb-6">
     <div>
-        <h2 class="text-2xl font-semibold text-slate-900">Rotalar</h2>
+        <h2 class="text-xl font-semibold text-slate-900">Rotalar</h2>
         <p class="text-slate-500 mt-1">Mesajlari kanal hesabi ve eslesme kuralina gore agent'a bagla</p>
     </div>
-    <button onclick="openRouteForm()" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700">Yeni route</button>
+    <button onclick="openRouteForm()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni route</button>
 </div>
 
 <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
@@ -33,7 +33,7 @@
             <select id="simChannel" class="w-full border rounded-md px-3 py-2"></select>
             <input id="simMessage" class="w-full border rounded-md px-3 py-2" placeholder="LEZZET merhaba">
             <input id="simAdSource" class="w-full border rounded-md px-3 py-2" placeholder="ad_source">
-            <button onclick="simulateRoute()" class="w-full bg-slate-900 text-white rounded-md px-4 py-2 hover:bg-slate-800">Test et</button>
+            <button onclick="simulateRoute()" class="w-full btn-primary btn-icon justify-center px-4 py-2"><i data-lucide="route"></i>Test et</button>
             <pre id="simResult" class="bg-slate-50 border rounded-md p-3 text-xs overflow-auto min-h-24"></pre>
         </div>
     </aside>
@@ -42,8 +42,8 @@
 <dialog id="routeDialog" class="rounded-lg w-full max-w-xl p-0 backdrop:bg-slate-950/50">
     <form id="routeForm" class="bg-white p-6 space-y-4">
         <div class="flex items-start justify-between">
-            <h3 id="routeFormTitle" class="text-lg font-semibold">Route</h3>
-            <button type="button" onclick="routeDialog.close()" class="text-slate-500 hover:text-slate-900">Kapat</button>
+            <h3 id="routeFormTitle" class="text-base font-semibold">Route</h3>
+            <button type="button" onclick="routeDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
         </div>
         <input id="routeId" type="hidden">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -57,12 +57,12 @@
             </label>
             <label class="space-y-1">
                 <span class="text-sm font-medium">Match type</span>
-                <select id="matchType" class="w-full border rounded-md px-3 py-2">
-                    <option value="default">default</option>
-                    <option value="prefix">prefix</option>
-                    <option value="keyword">keyword</option>
-                    <option value="exact">exact</option>
-                    <option value="ad_source">ad_source</option>
+                <select id="matchType" class="w-full border rounded-md px-3 py-2" data-icon="list-filter">
+                    <option value="default" data-icon="circle-dot" data-meta="Fallback route">default</option>
+                    <option value="prefix" data-icon="text-cursor-input" data-meta="Ilk kelime ile eslesir">prefix</option>
+                    <option value="keyword" data-icon="search" data-meta="Mesaj icinde arar">keyword</option>
+                    <option value="exact" data-icon="equal" data-meta="Tam metin eslesmesi">exact</option>
+                    <option value="ad_source" data-icon="megaphone" data-meta="Reklam/referral kaynagi">ad_source</option>
                 </select>
             </label>
             <label class="space-y-1">
@@ -79,8 +79,8 @@
             </label>
         </div>
         <div class="flex justify-end gap-2 pt-2">
-            <button type="button" onclick="routeDialog.close()" class="px-4 py-2 rounded-md border">Vazgec</button>
-            <button class="px-4 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700">Kaydet</button>
+            <button type="button" onclick="routeDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
+            <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Kaydet</button>
         </div>
     </form>
 </dialog>
@@ -101,10 +101,11 @@ async function api(path, options = {}) {
 async function loadRefs() {
     channels = await (await api('/api/channels')).json();
     agents = await (await api('/api/agents')).json();
-    const channelOptions = channels.map(c => `<option value="${c.id}">${c.name} (${c.channel_type})</option>`).join('');
+    const channelOptions = channels.map(c => `<option value="${c.id}" data-icon="radio-tower" data-meta="${c.channel_type}">${c.name}</option>`).join('');
     channelSelect.innerHTML = channelOptions;
     simChannel.innerHTML = channelOptions;
-    agentSelect.innerHTML = agents.map(a => `<option value="${a.id}">${a.name} (${a.slug})</option>`).join('');
+    agentSelect.innerHTML = agents.map(a => `<option value="${a.id}" data-icon="bot" data-meta="${a.slug}">${a.name}</option>`).join('');
+    if (window.enhanceSelects) window.enhanceSelects();
 }
 
 async function loadRoutes() {
@@ -116,13 +117,16 @@ async function loadRoutes() {
             <td class="p-3"><span class="font-mono">${r.match_type}</span> <span class="text-slate-500">${r.match_value || '-'}</span></td>
             <td class="p-3">${r.priority}</td>
             <td class="p-3">${statusBadge(r.active)}</td>
-            <td class="p-3 text-right space-x-2">
-                <button onclick="openRouteForm(${r.id})" class="px-3 py-1.5 rounded border hover:bg-slate-50">Duzenle</button>
-                <button onclick="setRouteActive(${r.id}, ${!r.active})" class="px-3 py-1.5 rounded border hover:bg-slate-50">${r.active ? 'Pasif' : 'Aktif'}</button>
-                <button onclick="deleteRoute(${r.id})" class="px-3 py-1.5 rounded border border-red-200 text-red-700 hover:bg-red-50">Sil</button>
+            <td class="p-3 text-right">
+                <div class="inline-flex items-center gap-2">
+                    <button onclick="openRouteForm(${r.id})" class="icon-btn" title="Duzenle" aria-label="Duzenle"><i data-lucide="pencil"></i></button>
+                    <button onclick="setRouteActive(${r.id}, ${!r.active})" class="icon-btn" title="${r.active ? 'Pasife al' : 'Aktif et'}" aria-label="${r.active ? 'Pasife al' : 'Aktif et'}"><i data-lucide="${r.active ? 'pause' : 'play'}"></i></button>
+                    <button onclick="deleteRoute(${r.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
+                </div>
             </td>
         </tr>
     `).join('');
+    if (window.lucide) window.lucide.createIcons();
 }
 
 function statusBadge(active) {
@@ -141,6 +145,7 @@ function openRouteForm(id = null) {
     matchValue.value = r?.match_value || '';
     priority.value = r?.priority ?? 100;
     routeActive.checked = r ? r.active : true;
+    if (window.enhanceSelects) window.enhanceSelects(routeDialog);
     routeDialog.showModal();
 }
 
@@ -190,8 +195,12 @@ async function simulateRoute() {
         })
     });
     simResult.textContent = JSON.stringify(await res.json(), null, 2);
+    if (window.lucide) window.lucide.createIcons();
 }
 
-loadRefs().then(loadRoutes);
+loadRefs().then(() => {
+    loadRoutes();
+    if (window.lucide) window.lucide.createIcons();
+});
 </script>
 {% endblock %}

@@ -4,10 +4,10 @@
 {% block content %}
 <div class="flex items-center justify-between mb-6">
     <div>
-        <h2 class="text-2xl font-semibold text-slate-900">Agentlar</h2>
+        <h2 class="text-xl font-semibold text-slate-900">Agentlar</h2>
         <p class="text-slate-500 mt-1">Prompt, model ve aktiflik ayarlari</p>
     </div>
-    <button onclick="openAgentForm()" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700">Yeni agent</button>
+    <button onclick="openAgentForm()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni agent</button>
 </div>
 
 <div id="agentsGrid" class="grid grid-cols-1 xl:grid-cols-2 gap-6"></div>
@@ -15,8 +15,8 @@
 <dialog id="agentDialog" class="rounded-lg w-full max-w-4xl p-0 backdrop:bg-slate-950/50">
     <form id="agentForm" class="bg-white p-6 space-y-4">
         <div class="flex items-start justify-between">
-            <h3 id="agentFormTitle" class="text-lg font-semibold">Agent</h3>
-            <button type="button" onclick="agentDialog.close()" class="text-slate-500 hover:text-slate-900">Kapat</button>
+            <h3 id="agentFormTitle" class="text-base font-semibold">Agent</h3>
+            <button type="button" onclick="agentDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
         </div>
         <input id="agentId" type="hidden">
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -30,11 +30,11 @@
             </label>
             <label class="space-y-1">
                 <span class="text-sm font-medium">Tip</span>
-                <select id="agentType" class="w-full border rounded-md px-3 py-2">
-                    <option value="retreat">retreat</option>
-                    <option value="restaurant">restaurant</option>
-                    <option value="generic_prompt">generic_prompt</option>
-                    <option value="custom_code">custom_code</option>
+                <select id="agentType" class="w-full border rounded-md px-3 py-2" data-icon="bot">
+                    <option value="retreat" data-icon="sparkles" data-meta="Inziva bilgi ve handoff">retreat</option>
+                    <option value="restaurant" data-icon="utensils" data-meta="Menu, sepet ve siparis">restaurant</option>
+                    <option value="generic_prompt" data-icon="message-square-text" data-meta="Prompt tabanli agent">generic_prompt</option>
+                    <option value="custom_code" data-icon="code-2" data-meta="Kod ile calisan agent">custom_code</option>
                 </select>
             </label>
             <label class="space-y-1">
@@ -55,8 +55,8 @@
             </label>
         </div>
         <div class="flex justify-end gap-2 pt-2">
-            <button type="button" onclick="agentDialog.close()" class="px-4 py-2 rounded-md border">Vazgec</button>
-            <button class="px-4 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700">Kaydet</button>
+            <button type="button" onclick="agentDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
+            <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Kaydet</button>
         </div>
     </form>
 </dialog>
@@ -78,7 +78,7 @@ async function loadAgents() {
         <section class="bg-white border border-slate-200 rounded-lg p-5">
             <div class="flex items-start justify-between gap-4 mb-4">
                 <div>
-                    <h3 class="text-lg font-semibold">${agent.name}</h3>
+                    <h3 class="text-base font-semibold">${agent.name}</h3>
                     <p class="text-sm text-slate-500">${agent.slug} · ${agent.type} · ${agent.model}</p>
                 </div>
                 ${statusBadge(agent.active)}
@@ -86,17 +86,18 @@ async function loadAgents() {
             <textarea id="prompt-${agent.id}" rows="8" class="w-full border rounded-md px-3 py-2 font-mono text-xs">${escapeHtml(agent.system_prompt || '')}</textarea>
             <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-2">
                 <input id="test-${agent.id}" class="border rounded-md px-3 py-2 text-sm md:col-span-2" placeholder="Test mesaji">
-                <button onclick="testAgent(${agent.id})" class="bg-slate-900 text-white rounded-md px-3 py-2 hover:bg-slate-800">Test</button>
+                <button onclick="testAgent(${agent.id})" class="btn-primary btn-icon justify-center px-3 py-2"><i data-lucide="send"></i>Test</button>
             </div>
             <pre id="testResult-${agent.id}" class="mt-3 bg-slate-50 border rounded-md p-3 text-xs min-h-16 overflow-auto"></pre>
             <div class="mt-4 flex justify-end gap-2">
-                <button onclick="quickSavePrompt(${agent.id})" class="px-3 py-1.5 rounded border hover:bg-slate-50">Prompt kaydet</button>
-                <button onclick="openAgentForm(${agent.id})" class="px-3 py-1.5 rounded border hover:bg-slate-50">Duzenle</button>
-                <button onclick="setAgentActive('${agent.slug}', ${!agent.active})" class="px-3 py-1.5 rounded border hover:bg-slate-50">${agent.active ? 'Pasif' : 'Aktif'}</button>
-                <button onclick="deleteAgent(${agent.id})" class="px-3 py-1.5 rounded border border-red-200 text-red-700 hover:bg-red-50">Sil</button>
+                <button onclick="quickSavePrompt(${agent.id})" class="icon-btn" title="Prompt kaydet" aria-label="Prompt kaydet"><i data-lucide="save"></i></button>
+                <button onclick="openAgentForm(${agent.id})" class="icon-btn" title="Duzenle" aria-label="Duzenle"><i data-lucide="pencil"></i></button>
+                <button onclick="setAgentActive('${agent.slug}', ${!agent.active})" class="icon-btn" title="${agent.active ? 'Pasife al' : 'Aktif et'}" aria-label="${agent.active ? 'Pasife al' : 'Aktif et'}"><i data-lucide="${agent.active ? 'pause' : 'play'}"></i></button>
+                <button onclick="deleteAgent(${agent.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
             </div>
         </section>
     `).join('');
+    if (window.lucide) window.lucide.createIcons();
 }
 
 function statusBadge(active) {
@@ -121,6 +122,7 @@ function openAgentForm(id = null) {
     agentActive.checked = agent ? agent.active : true;
     agentPrompt.value = agent?.system_prompt || '';
     agentKnowledge.value = agent?.knowledge_base || '';
+    if (window.enhanceSelects) window.enhanceSelects(agentDialog);
     agentDialog.showModal();
 }
 

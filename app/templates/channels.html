@@ -4,10 +4,10 @@
 {% block content %}
 <div class="flex items-center justify-between mb-6">
     <div>
-        <h2 class="text-2xl font-semibold text-slate-900">Kanallar</h2>
+        <h2 class="text-xl font-semibold text-slate-900">Kanallar</h2>
         <p class="text-slate-500 mt-1">WhatsApp, Telegram ve Instagram hesaplari</p>
     </div>
-    <button onclick="openChannelForm()" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700">Yeni kanal</button>
+    <button onclick="openChannelForm()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni kanal</button>
 </div>
 
 <div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
@@ -29,19 +29,19 @@
     <form id="channelForm" class="bg-white p-6 space-y-4">
         <div class="flex items-start justify-between">
             <div>
-                <h3 id="formTitle" class="text-lg font-semibold">Kanal</h3>
+                <h3 id="formTitle" class="text-base font-semibold">Kanal</h3>
                 <p class="text-sm text-slate-500">Credential alanini bos birakirsan mevcut deger korunur.</p>
             </div>
-            <button type="button" onclick="channelDialog.close()" class="text-slate-500 hover:text-slate-900">Kapat</button>
+            <button type="button" onclick="channelDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
         </div>
         <input id="channelId" type="hidden">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <label class="space-y-1">
                 <span class="text-sm font-medium">Tip</span>
-                <select id="channelType" class="w-full border rounded-md px-3 py-2">
-                    <option value="whatsapp">WhatsApp</option>
-                    <option value="telegram">Telegram</option>
-                    <option value="instagram">Instagram</option>
+                <select id="channelType" class="w-full border rounded-md px-3 py-2" data-icon="radio-tower">
+                    <option value="whatsapp" data-icon="message-circle" data-meta="Meta Cloud API">WhatsApp</option>
+                    <option value="telegram" data-icon="send" data-meta="Bot API">Telegram</option>
+                    <option value="instagram" data-icon="instagram" data-meta="DM webhook">Instagram</option>
                 </select>
             </label>
             <label class="space-y-1">
@@ -70,8 +70,8 @@
             </label>
         </div>
         <div class="flex justify-end gap-2 pt-2">
-            <button type="button" onclick="channelDialog.close()" class="px-4 py-2 rounded-md border">Vazgec</button>
-            <button class="px-4 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700">Kaydet</button>
+            <button type="button" onclick="channelDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
+            <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Kaydet</button>
         </div>
     </form>
 </dialog>
@@ -99,13 +99,16 @@ async function loadChannels() {
             <td class="p-3 font-mono text-xs">${c.external_id}</td>
             <td class="p-3 font-mono text-xs text-slate-500">${c.credentials_json}</td>
             <td class="p-3">${statusBadge(c.active)}</td>
-            <td class="p-3 text-right space-x-2">
-                <button onclick="openChannelForm(${c.id})" class="px-3 py-1.5 rounded border hover:bg-slate-50">Duzenle</button>
-                <button onclick="setChannelActive(${c.id}, ${!c.active})" class="px-3 py-1.5 rounded border hover:bg-slate-50">${c.active ? 'Pasif' : 'Aktif'}</button>
-                <button onclick="deleteChannel(${c.id})" class="px-3 py-1.5 rounded border border-red-200 text-red-700 hover:bg-red-50">Sil</button>
+            <td class="p-3 text-right">
+                <div class="inline-flex items-center gap-2">
+                    <button onclick="openChannelForm(${c.id})" class="icon-btn" title="Duzenle" aria-label="Duzenle"><i data-lucide="pencil"></i></button>
+                    <button onclick="setChannelActive(${c.id}, ${!c.active})" class="icon-btn" title="${c.active ? 'Pasife al' : 'Aktif et'}" aria-label="${c.active ? 'Pasife al' : 'Aktif et'}"><i data-lucide="${c.active ? 'pause' : 'play'}"></i></button>
+                    <button onclick="deleteChannel(${c.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
+                </div>
             </td>
         </tr>
     `).join('');
+    if (window.lucide) window.lucide.createIcons();
 }
 
 function statusBadge(active) {
@@ -125,6 +128,7 @@ function openChannelForm(id = null) {
     webhookSecret.value = '';
     credentialsJson.value = '';
     channelActive.checked = c ? c.active : true;
+    if (window.enhanceSelects) window.enhanceSelects(channelDialog);
     channelDialog.showModal();
 }
 

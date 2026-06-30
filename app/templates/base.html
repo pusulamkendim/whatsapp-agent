@@ -7,57 +7,97 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        .sidebar-link.active { background-color: rgb(17 24 39); color: white; border-color: rgb(99 102 241); }
-        .focus-ring:focus { outline: 2px solid rgb(99 102 241); outline-offset: 2px; }
+        body { letter-spacing: 0; }
+        .top-link.active { color: rgb(17 24 39); border-bottom-color: rgb(17 24 39); }
+        .sidebar-link.active { background: rgb(243 244 246); color: rgb(17 24 39); font-weight: 600; }
+        .sidebar-link { color: rgb(82 82 91); }
+        .sidebar-link:hover { background: rgb(248 250 252); color: rgb(17 24 39); }
+        .panel { background: white; border: 1px solid rgb(229 231 235); border-radius: 14px; }
+        .btn-primary { background: rgb(37 99 235); color: white; border-radius: 10px; }
+        .btn-primary:hover { background: rgb(29 78 216); }
+        .btn-secondary { border: 1px solid rgb(229 231 235); border-radius: 10px; background: white; }
+        .btn-secondary:hover { background: rgb(249 250 251); }
+        input, select, textarea { border-color: rgb(212 212 216); border-radius: 10px; }
+        input:focus, select:focus, textarea:focus { outline: 2px solid rgb(37 99 235); outline-offset: 1px; border-color: transparent; }
     </style>
 </head>
-<body class="bg-slate-100 min-h-screen text-slate-900">
-    <div class="flex">
-        <!-- Sidebar -->
-        <aside class="w-72 bg-slate-950 min-h-screen fixed border-r border-slate-800">
-            <div class="p-6 border-b border-slate-800">
-                <h1 class="text-xl font-semibold text-white">AgentLense</h1>
-                <p class="text-slate-400 text-sm mt-1">Operations Console</p>
-            </div>
-            <nav class="mt-4 px-3 space-y-1">
-                <a href="/dashboard" class="sidebar-link flex items-center px-3 py-2.5 rounded-md border border-transparent text-slate-300 hover:bg-slate-900 hover:text-white transition {% if active == 'dashboard' %}active{% endif %}">
-                    <span class="mr-3">📊</span> Dashboard
-                </a>
-                <a href="/dashboard/conversations" class="sidebar-link flex items-center px-3 py-2.5 rounded-md border border-transparent text-slate-300 hover:bg-slate-900 hover:text-white transition {% if active == 'conversations' %}active{% endif %}">
-                    <span class="mr-3">💬</span> Konusmalar
-                </a>
-                <a href="/dashboard/handoffs" class="sidebar-link flex items-center px-3 py-2.5 rounded-md border border-transparent text-slate-300 hover:bg-slate-900 hover:text-white transition {% if active == 'handoffs' %}active{% endif %}">
-                    <span class="mr-3">🤝</span> Yonlendirmeler
-                </a>
-                <a href="/dashboard/agents" class="sidebar-link flex items-center px-3 py-2.5 rounded-md border border-transparent text-slate-300 hover:bg-slate-900 hover:text-white transition {% if active == 'agents' %}active{% endif %}">
-                    <span class="mr-3">🤖</span> Agent Ayarlari
-                </a>
-                <a href="/dashboard/channels" class="sidebar-link flex items-center px-3 py-2.5 rounded-md border border-transparent text-slate-300 hover:bg-slate-900 hover:text-white transition {% if active == 'channels' %}active{% endif %}">
-                    <span class="mr-3">📡</span> Kanallar
-                </a>
-                <a href="/dashboard/routes" class="sidebar-link flex items-center px-3 py-2.5 rounded-md border border-transparent text-slate-300 hover:bg-slate-900 hover:text-white transition {% if active == 'routes' %}active{% endif %}">
-                    <span class="mr-3">🧭</span> Rotalar
-                </a>
-                <a href="/dashboard/knowledge" class="sidebar-link flex items-center px-3 py-2.5 rounded-md border border-transparent text-slate-300 hover:bg-slate-900 hover:text-white transition {% if active == 'knowledge' %}active{% endif %}">
-                    <span class="mr-3">📚</span> Bilgi Bankasi
-                </a>
-            </nav>
-            <div class="absolute bottom-4 left-0 right-0 px-6 space-y-4">
-                <form method="post" action="/logout">
-                    <button class="w-full text-left text-sm text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 rounded-md px-3 py-2 transition">Cikis</button>
-                </form>
-                <div class="text-slate-500 text-xs">
-                    <p>WhatsApp: +905428078429</p>
-                    <p>Telegram: @kohphangan_inziva_bot</p>
+<body class="bg-white min-h-screen text-zinc-950">
+    <header class="fixed top-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-b border-zinc-200">
+        <div class="h-20 flex items-center px-7 gap-6">
+            <a href="/dashboard" class="flex items-center gap-3 min-w-64">
+                <span class="grid place-items-center w-9 h-9 rounded-lg bg-zinc-950 text-white font-semibold">AL</span>
+                <div>
+                    <div class="text-xl font-semibold tracking-tight">AgentLense</div>
+                    <div class="text-xs text-zinc-500 -mt-0.5">Multi-channel agent console</div>
+                </div>
+            </a>
+
+            <div class="hidden lg:flex flex-1 justify-center">
+                <div class="relative w-full max-w-xl">
+                    <span class="absolute left-4 top-2.5 text-zinc-400">⌕</span>
+                    <input class="w-full bg-zinc-50 border border-zinc-200 rounded-2xl pl-10 pr-16 py-2.5 text-sm" placeholder="Ara...">
+                    <span class="absolute right-4 top-2.5 text-xs text-zinc-400">⌘K</span>
                 </div>
             </div>
-        </aside>
 
-        <!-- Main Content -->
-        <main class="ml-72 flex-1 p-8">
+            <nav class="hidden xl:flex items-center gap-1 text-sm">
+                <a href="/dashboard" class="top-link px-3 py-7 border-b-2 border-transparent text-zinc-600 hover:text-zinc-950 {% if active == 'dashboard' %}active{% endif %}">Overview</a>
+                <a href="/dashboard/channels" class="top-link px-3 py-7 border-b-2 border-transparent text-zinc-600 hover:text-zinc-950 {% if active == 'channels' %}active{% endif %}">Channels</a>
+                <a href="/dashboard/routes" class="top-link px-3 py-7 border-b-2 border-transparent text-zinc-600 hover:text-zinc-950 {% if active == 'routes' %}active{% endif %}">Routes</a>
+                <a href="/dashboard/agents" class="top-link px-3 py-7 border-b-2 border-transparent text-zinc-600 hover:text-zinc-950 {% if active == 'agents' %}active{% endif %}">Agents</a>
+            </nav>
+
+            <form method="post" action="/logout" class="ml-auto">
+                <button class="btn-secondary px-4 py-2 text-sm">Cikis</button>
+            </form>
+        </div>
+    </header>
+
+    <aside class="fixed top-20 bottom-0 left-0 w-72 bg-white border-r border-zinc-200 overflow-y-auto">
+        <div class="p-5">
+            <div class="border border-zinc-200 rounded-2xl p-4 mb-6">
+                <div class="text-xs uppercase tracking-wide text-zinc-500 font-semibold">Workspace</div>
+                <div class="mt-1 font-medium">Production</div>
+                <div class="text-sm text-zinc-500">agentapi.pusulamkendim.com</div>
+            </div>
+
+            <nav class="space-y-7">
+                <div>
+                    <div class="px-3 mb-2 text-xs font-semibold text-zinc-950">Operate</div>
+                    <div class="space-y-1">
+                        <a href="/dashboard" class="sidebar-link block px-3 py-2.5 rounded-xl {% if active == 'dashboard' %}active{% endif %}">Overview</a>
+                        <a href="/dashboard/conversations" class="sidebar-link block px-3 py-2.5 rounded-xl {% if active == 'conversations' %}active{% endif %}">Conversations</a>
+                        <a href="/dashboard/handoffs" class="sidebar-link block px-3 py-2.5 rounded-xl {% if active == 'handoffs' %}active{% endif %}">Handoffs</a>
+                    </div>
+                </div>
+
+                <div class="border-t border-zinc-200 pt-5">
+                    <div class="px-3 mb-2 text-xs font-semibold text-zinc-950">Build</div>
+                    <div class="space-y-1">
+                        <a href="/dashboard/agents" class="sidebar-link block px-3 py-2.5 rounded-xl {% if active == 'agents' %}active{% endif %}">Agents</a>
+                        <a href="/dashboard/channels" class="sidebar-link block px-3 py-2.5 rounded-xl {% if active == 'channels' %}active{% endif %}">Channels</a>
+                        <a href="/dashboard/routes" class="sidebar-link block px-3 py-2.5 rounded-xl {% if active == 'routes' %}active{% endif %}">Routes</a>
+                        <a href="/dashboard/knowledge" class="sidebar-link block px-3 py-2.5 rounded-xl {% if active == 'knowledge' %}active{% endif %}">Knowledge Base</a>
+                    </div>
+                </div>
+
+                <div class="border-t border-zinc-200 pt-5">
+                    <div class="px-3 mb-2 text-xs font-semibold text-zinc-950">Status</div>
+                    <div class="px-3 text-sm text-zinc-500 leading-6">
+                        <div>WhatsApp: active</div>
+                        <div>Telegram: active</div>
+                        <div>Instagram: active</div>
+                    </div>
+                </div>
+            </nav>
+        </div>
+    </aside>
+
+    <main class="pt-20 pl-72">
+        <div class="max-w-[1180px] px-10 py-10">
             {% block content %}{% endblock %}
-        </main>
-    </div>
+        </div>
+    </main>
 
     {% block scripts %}{% endblock %}
 </body>

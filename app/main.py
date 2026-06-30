@@ -46,7 +46,10 @@ def startup():
     import os
     if os.getenv("TELEGRAM_BOT_TOKEN"):
         base_url = os.getenv("BASE_URL", "https://agentapi.pusulamkendim.com")
-        tg_setup_webhook(f"{base_url}/telegram/webhook")
+        try:
+            tg_setup_webhook(f"{base_url}/telegram/webhook")
+        except Exception as exc:
+            print(f"⚠️ Telegram webhook ayarlanamadı: {exc}")
     if not ADMIN_SECRET:
         message = "production'da dashboard/API kilitli" if IS_PRODUCTION else "dashboard/API auth devre dışı"
         print(f"⚠️ ADMIN_PASSWORD/ADMIN_TOKEN yok; {message}.")

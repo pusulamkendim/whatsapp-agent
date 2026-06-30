@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Giris - AgentLense</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 min-h-screen flex items-center justify-center text-slate-900">
+    <main class="w-full max-w-sm bg-white rounded-lg shadow-xl p-6">
+        <div class="mb-6">
+            <h1 class="text-xl font-semibold">AgentLense</h1>
+            <p class="text-sm text-slate-500 mt-1">Admin girisi</p>
+        </div>
+        <form id="loginForm" class="space-y-4">
+            <input id="password" type="password" autocomplete="current-password" class="w-full border border-slate-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Admin sifresi">
+            <button class="w-full bg-indigo-600 text-white rounded-md px-4 py-2 hover:bg-indigo-700">Giris</button>
+            <p id="error" class="hidden text-sm text-red-600">Giris basarisiz.</p>
+        </form>
+    </main>
+    <script>
+    loginForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({password: password.value})
+        });
+        if (res.ok) {
+            location.href = '/dashboard';
+        } else {
+            error.classList.remove('hidden');
+        }
+    });
+    </script>
+</body>
+</html>

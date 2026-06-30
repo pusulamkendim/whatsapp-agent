@@ -2,66 +2,182 @@
 {% block title %}Agent Ayarlari{% endblock %}
 
 {% block content %}
-<h2 class="text-2xl font-bold text-gray-800 mb-6">Agent Ayarlari</h2>
-
-<div id="agents-container" class="space-y-6">
-    <p class="text-gray-400">Yukleniyor...</p>
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h2 class="text-2xl font-semibold text-slate-900">Agentlar</h2>
+        <p class="text-slate-500 mt-1">Prompt, model ve aktiflik ayarlari</p>
+    </div>
+    <button onclick="openAgentForm()" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700">Yeni agent</button>
 </div>
+
+<div id="agentsGrid" class="grid grid-cols-1 xl:grid-cols-2 gap-6"></div>
+
+<dialog id="agentDialog" class="rounded-lg w-full max-w-4xl p-0 backdrop:bg-slate-950/50">
+    <form id="agentForm" class="bg-white p-6 space-y-4">
+        <div class="flex items-start justify-between">
+            <h3 id="agentFormTitle" class="text-lg font-semibold">Agent</h3>
+            <button type="button" onclick="agentDialog.close()" class="text-slate-500 hover:text-slate-900">Kapat</button>
+        </div>
+        <input id="agentId" type="hidden">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Slug</span>
+                <input id="agentSlug" class="w-full border rounded-md px-3 py-2">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Ad</span>
+                <input id="agentName" class="w-full border rounded-md px-3 py-2">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Tip</span>
+                <select id="agentType" class="w-full border rounded-md px-3 py-2">
+                    <option value="retreat">retreat</option>
+                    <option value="restaurant">restaurant</option>
+                    <option value="generic_prompt">generic_prompt</option>
+                    <option value="custom_code">custom_code</option>
+                </select>
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Model</span>
+                <input id="agentModel" class="w-full border rounded-md px-3 py-2" value="gemini-2.5-flash">
+            </label>
+            <label class="flex items-center gap-2 md:col-span-4">
+                <input id="agentActive" type="checkbox" class="rounded">
+                <span class="text-sm font-medium">Aktif</span>
+            </label>
+            <label class="space-y-1 md:col-span-4">
+                <span class="text-sm font-medium">System prompt</span>
+                <textarea id="agentPrompt" rows="10" class="w-full border rounded-md px-3 py-2 font-mono text-sm"></textarea>
+            </label>
+            <label class="space-y-1 md:col-span-4">
+                <span class="text-sm font-medium">Knowledge base</span>
+                <textarea id="agentKnowledge" rows="6" class="w-full border rounded-md px-3 py-2 font-mono text-sm"></textarea>
+            </label>
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+            <button type="button" onclick="agentDialog.close()" class="px-4 py-2 rounded-md border">Vazgec</button>
+            <button class="px-4 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700">Kaydet</button>
+        </div>
+    </form>
+</dialog>
 {% endblock %}
 
 {% block scripts %}
 <script>
-async function loadAgents() {
-    const res = await fetch('/api/agents');
-    const agents = await res.json();
+let agents = [];
 
-    const container = document.getElementById('agents-container');
-    container.innerHTML = '';
-
-    agents.forEach(agent => {
-        container.innerHTML += `
-            <div class="bg-white rounded-xl shadow p-6">
-                <div class="flex items-center justify-between mb-4">
-                    <div>
-                        <h3 class="text-lg font-semibold text-gray-700">${agent.name}</h3>
-                        <p class="text-sm text-gray-400">${agent.type} - ${agent.model}</p>
-                    </div>
-                    <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" ${agent.active ? 'checked' : ''} onchange="toggleAgent('${agent.type}', this.checked)" class="sr-only peer">
-                        <div class="w-11 h-6 bg-gray-200 peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                        <span class="ml-3 text-sm font-medium text-gray-700">${agent.active ? 'Aktif' : 'Pasif'}</span>
-                    </label>
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-600 mb-2">System Prompt</label>
-                    <textarea id="prompt-${agent.type}" rows="10" class="w-full border rounded-lg p-3 text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none">${agent.system_prompt}</textarea>
-                </div>
-                <div class="mt-4 flex justify-end">
-                    <button onclick="saveAgent('${agent.type}')" class="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition">Kaydet</button>
-                </div>
-            </div>
-        `;
-    });
+async function api(path, options = {}) {
+    const res = await fetch(path, options);
+    if (res.status === 401) location.href = '/login';
+    return res;
 }
 
-async function toggleAgent(type, active) {
-    await fetch(`/api/agents/${type}/config`, {
+async function loadAgents() {
+    agents = await (await api('/api/agents')).json();
+    agentsGrid.innerHTML = agents.map(agent => `
+        <section class="bg-white border border-slate-200 rounded-lg p-5">
+            <div class="flex items-start justify-between gap-4 mb-4">
+                <div>
+                    <h3 class="text-lg font-semibold">${agent.name}</h3>
+                    <p class="text-sm text-slate-500">${agent.slug} · ${agent.type} · ${agent.model}</p>
+                </div>
+                ${statusBadge(agent.active)}
+            </div>
+            <textarea id="prompt-${agent.id}" rows="8" class="w-full border rounded-md px-3 py-2 font-mono text-xs">${escapeHtml(agent.system_prompt || '')}</textarea>
+            <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-2">
+                <input id="test-${agent.id}" class="border rounded-md px-3 py-2 text-sm md:col-span-2" placeholder="Test mesaji">
+                <button onclick="testAgent(${agent.id})" class="bg-slate-900 text-white rounded-md px-3 py-2 hover:bg-slate-800">Test</button>
+            </div>
+            <pre id="testResult-${agent.id}" class="mt-3 bg-slate-50 border rounded-md p-3 text-xs min-h-16 overflow-auto"></pre>
+            <div class="mt-4 flex justify-end gap-2">
+                <button onclick="quickSavePrompt(${agent.id})" class="px-3 py-1.5 rounded border hover:bg-slate-50">Prompt kaydet</button>
+                <button onclick="openAgentForm(${agent.id})" class="px-3 py-1.5 rounded border hover:bg-slate-50">Duzenle</button>
+                <button onclick="setAgentActive('${agent.slug}', ${!agent.active})" class="px-3 py-1.5 rounded border hover:bg-slate-50">${agent.active ? 'Pasif' : 'Aktif'}</button>
+                <button onclick="deleteAgent(${agent.id})" class="px-3 py-1.5 rounded border border-red-200 text-red-700 hover:bg-red-50">Sil</button>
+            </div>
+        </section>
+    `).join('');
+}
+
+function statusBadge(active) {
+    return active
+        ? '<span class="inline-flex px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-xs font-medium">Aktif</span>'
+        : '<span class="inline-flex px-2 py-1 rounded bg-slate-100 text-slate-600 text-xs font-medium">Pasif</span>';
+}
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+
+function openAgentForm(id = null) {
+    const agent = agents.find(item => item.id === id);
+    agentFormTitle.textContent = agent ? 'Agent duzenle' : 'Yeni agent';
+    agentId.value = agent?.id || '';
+    agentSlug.value = agent?.slug || '';
+    agentSlug.disabled = Boolean(agent);
+    agentName.value = agent?.name || '';
+    agentType.value = agent?.type || 'generic_prompt';
+    agentModel.value = agent?.model || 'gemini-2.5-flash';
+    agentActive.checked = agent ? agent.active : true;
+    agentPrompt.value = agent?.system_prompt || '';
+    agentKnowledge.value = agent?.knowledge_base || '';
+    agentDialog.showModal();
+}
+
+agentForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+        slug: agentSlug.value,
+        name: agentName.value,
+        type: agentType.value,
+        model: agentModel.value,
+        active: agentActive.checked,
+        system_prompt: agentPrompt.value,
+        knowledge_base: agentKnowledge.value
+    };
+    const id = agentId.value;
+    const agent = agents.find(item => item.id === Number(id));
+    await api(id ? `/api/agents/${agent.slug}/config` : '/api/agents', {
+        method: id ? 'PUT' : 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    });
+    agentDialog.close();
+    loadAgents();
+});
+
+async function quickSavePrompt(id) {
+    const agent = agents.find(item => item.id === id);
+    await api(`/api/agents/${agent.slug}/config`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({system_prompt: document.getElementById(`prompt-${id}`).value})
+    });
+    loadAgents();
+}
+
+async function setAgentActive(slug, active) {
+    await api(`/api/agents/${slug}/config`, {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({active})
     });
+    loadAgents();
 }
 
-async function saveAgent(type) {
-    const prompt = document.getElementById(`prompt-${type}`).value;
-    const res = await fetch(`/api/agents/${type}/config`, {
-        method: 'PUT',
+async function deleteAgent(id) {
+    if (!confirm('Agent pasife alinsin mi? Bagli route kayitlari da pasife alinir.')) return;
+    await api(`/api/agents/${id}`, {method: 'DELETE'});
+    loadAgents();
+}
+
+async function testAgent(id) {
+    const res = await api(`/api/agents/${id}/test`, {
+        method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({system_prompt: prompt})
+        body: JSON.stringify({message: document.getElementById(`test-${id}`).value, dry_run: true})
     });
-    if (res.ok) {
-        alert('Kaydedildi!');
-    }
+    document.getElementById(`testResult-${id}`).textContent = JSON.stringify(await res.json(), null, 2);
 }
 
 loadAgents();

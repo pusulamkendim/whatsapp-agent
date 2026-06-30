@@ -2,75 +2,166 @@
 {% block title %}Kanallar{% endblock %}
 
 {% block content %}
-<div class="mb-6">
-    <h2 class="text-2xl font-bold text-gray-900">Kanallar</h2>
-    <p class="text-gray-500 mt-1">WhatsApp, Telegram ve Instagram hesaplari</p>
-</div>
-
-<div class="bg-white rounded-lg shadow p-6 mb-6">
-    <h3 class="font-semibold text-gray-900 mb-4">Yeni Kanal</h3>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <select id="channelType" class="border rounded px-3 py-2">
-            <option value="whatsapp">WhatsApp</option>
-            <option value="telegram">Telegram</option>
-            <option value="instagram">Instagram</option>
-        </select>
-        <input id="channelName" class="border rounded px-3 py-2" placeholder="Gorunen ad">
-        <input id="externalId" class="border rounded px-3 py-2" placeholder="phone_number_id / bot username / account id">
-        <input id="displayIdentifier" class="border rounded px-3 py-2" placeholder="Telefon, bot adi veya hesap">
-        <input id="webhookSecret" class="border rounded px-3 py-2" placeholder="Verify token">
-        <input id="credentialsJson" class="border rounded px-3 py-2 md:col-span-3" placeholder='{"access_token_env":"WHATSAPP_TOKEN"}'>
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h2 class="text-2xl font-semibold text-slate-900">Kanallar</h2>
+        <p class="text-slate-500 mt-1">WhatsApp, Telegram ve Instagram hesaplari</p>
     </div>
-    <button onclick="createChannel()" class="mt-4 bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Kaydet</button>
+    <button onclick="openChannelForm()" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700">Yeni kanal</button>
 </div>
 
-<div class="bg-white rounded-lg shadow overflow-hidden">
+<div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
     <table class="w-full text-sm">
-        <thead class="bg-gray-50 text-gray-600">
+        <thead class="bg-slate-50 text-slate-600">
             <tr>
-                <th class="text-left p-3">Tip</th>
-                <th class="text-left p-3">Ad</th>
+                <th class="text-left p-3">Kanal</th>
                 <th class="text-left p-3">External ID</th>
-                <th class="text-left p-3">Gorunen</th>
-                <th class="text-left p-3">Aktif</th>
+                <th class="text-left p-3">Credential</th>
+                <th class="text-left p-3">Status</th>
+                <th class="text-right p-3">Islem</th>
             </tr>
         </thead>
         <tbody id="channelsBody"></tbody>
     </table>
 </div>
+
+<dialog id="channelDialog" class="rounded-lg w-full max-w-2xl p-0 backdrop:bg-slate-950/50">
+    <form id="channelForm" class="bg-white p-6 space-y-4">
+        <div class="flex items-start justify-between">
+            <div>
+                <h3 id="formTitle" class="text-lg font-semibold">Kanal</h3>
+                <p class="text-sm text-slate-500">Credential alanini bos birakirsan mevcut deger korunur.</p>
+            </div>
+            <button type="button" onclick="channelDialog.close()" class="text-slate-500 hover:text-slate-900">Kapat</button>
+        </div>
+        <input id="channelId" type="hidden">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Tip</span>
+                <select id="channelType" class="w-full border rounded-md px-3 py-2">
+                    <option value="whatsapp">WhatsApp</option>
+                    <option value="telegram">Telegram</option>
+                    <option value="instagram">Instagram</option>
+                </select>
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Ad</span>
+                <input id="channelName" class="w-full border rounded-md px-3 py-2">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">External ID</span>
+                <input id="externalId" class="w-full border rounded-md px-3 py-2">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Gorunen</span>
+                <input id="displayIdentifier" class="w-full border rounded-md px-3 py-2">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Webhook secret</span>
+                <input id="webhookSecret" class="w-full border rounded-md px-3 py-2" placeholder="__KEEP__">
+            </label>
+            <label class="flex items-center gap-2 pt-7">
+                <input id="channelActive" type="checkbox" class="rounded">
+                <span class="text-sm font-medium">Aktif</span>
+            </label>
+            <label class="space-y-1 md:col-span-2">
+                <span class="text-sm font-medium">Credentials JSON</span>
+                <input id="credentialsJson" class="w-full border rounded-md px-3 py-2 font-mono text-sm" placeholder='{"access_token_env":"WHATSAPP_ACCESS_TOKEN"}'>
+            </label>
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+            <button type="button" onclick="channelDialog.close()" class="px-4 py-2 rounded-md border">Vazgec</button>
+            <button class="px-4 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700">Kaydet</button>
+        </div>
+    </form>
+</dialog>
 {% endblock %}
 
 {% block scripts %}
 <script>
+let channels = [];
+
+async function api(path, options = {}) {
+    const res = await fetch(path, options);
+    if (res.status === 401) location.href = '/login';
+    return res;
+}
+
 async function loadChannels() {
-    const res = await fetch('/api/channels');
-    const channels = await res.json();
+    const res = await api('/api/channels');
+    channels = await res.json();
     channelsBody.innerHTML = channels.map(c => `
-        <tr class="border-t">
-            <td class="p-3">${c.channel_type}</td>
-            <td class="p-3 font-medium">${c.name}</td>
-            <td class="p-3">${c.external_id}</td>
-            <td class="p-3">${c.display_identifier || '-'}</td>
-            <td class="p-3">${c.active ? 'Aktif' : 'Pasif'}</td>
+        <tr class="border-t border-slate-100">
+            <td class="p-3">
+                <div class="font-medium">${c.name}</div>
+                <div class="text-xs text-slate-500">${c.channel_type} · ${c.display_identifier || '-'}</div>
+            </td>
+            <td class="p-3 font-mono text-xs">${c.external_id}</td>
+            <td class="p-3 font-mono text-xs text-slate-500">${c.credentials_json}</td>
+            <td class="p-3">${statusBadge(c.active)}</td>
+            <td class="p-3 text-right space-x-2">
+                <button onclick="openChannelForm(${c.id})" class="px-3 py-1.5 rounded border hover:bg-slate-50">Duzenle</button>
+                <button onclick="setChannelActive(${c.id}, ${!c.active})" class="px-3 py-1.5 rounded border hover:bg-slate-50">${c.active ? 'Pasif' : 'Aktif'}</button>
+                <button onclick="deleteChannel(${c.id})" class="px-3 py-1.5 rounded border border-red-200 text-red-700 hover:bg-red-50">Sil</button>
+            </td>
         </tr>
     `).join('');
 }
 
-async function createChannel() {
-    await fetch('/api/channels', {
-        method: 'POST',
+function statusBadge(active) {
+    return active
+        ? '<span class="inline-flex px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-xs font-medium">Aktif</span>'
+        : '<span class="inline-flex px-2 py-1 rounded bg-slate-100 text-slate-600 text-xs font-medium">Pasif</span>';
+}
+
+function openChannelForm(id = null) {
+    const c = channels.find(item => item.id === id);
+    formTitle.textContent = c ? 'Kanal duzenle' : 'Yeni kanal';
+    channelId.value = c?.id || '';
+    channelType.value = c?.channel_type || 'whatsapp';
+    channelName.value = c?.name || '';
+    externalId.value = c?.external_id || '';
+    displayIdentifier.value = c?.display_identifier || '';
+    webhookSecret.value = '';
+    credentialsJson.value = '';
+    channelActive.checked = c ? c.active : true;
+    channelDialog.showModal();
+}
+
+channelForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+        channel_type: channelType.value,
+        name: channelName.value,
+        external_id: externalId.value,
+        display_identifier: displayIdentifier.value,
+        active: channelActive.checked
+    };
+    if (webhookSecret.value) payload.webhook_secret = webhookSecret.value;
+    if (credentialsJson.value) payload.credentials_json = credentialsJson.value;
+
+    const id = channelId.value;
+    await api(id ? `/api/channels/${id}` : '/api/channels', {
+        method: id ? 'PUT' : 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-            channel_type: channelType.value,
-            name: channelName.value,
-            external_id: externalId.value,
-            display_identifier: displayIdentifier.value,
-            webhook_secret: webhookSecret.value,
-            credentials_json: credentialsJson.value || '{}',
-            active: true
-        })
+        body: JSON.stringify(payload)
     });
-    channelName.value = externalId.value = displayIdentifier.value = webhookSecret.value = credentialsJson.value = '';
+    channelDialog.close();
+    loadChannels();
+});
+
+async function setChannelActive(id, active) {
+    await api(`/api/channels/${id}`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({active})
+    });
+    loadChannels();
+}
+
+async function deleteChannel(id) {
+    if (!confirm('Kanal pasife alinsin mi? Bagli route kayitlari da pasife alinir.')) return;
+    await api(`/api/channels/${id}`, {method: 'DELETE'});
     loadChannels();
 }
 

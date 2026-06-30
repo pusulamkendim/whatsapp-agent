@@ -1,9 +1,12 @@
 import json
 import os
+import hmac
+import hashlib
+import secrets
 from collections import OrderedDict
 from datetime import date
 from fastapi import FastAPI, Request, Query, BackgroundTasks
-from fastapi.responses import PlainTextResponse, HTMLResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from app.config import WHATSAPP_VERIFY_TOKEN
 from app.database import init_db, SessionLocal
@@ -17,6 +20,10 @@ from app.router import find_channel_account, resolve_route
 
 app = FastAPI(title="WhatsApp Multi-Agent")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+
+ADMIN_SECRET = os.getenv("ADMIN_PASSWORD") or os.getenv("ADMIN_TOKEN") or ""
+ADMIN_COOKIE = "agent_admin_session"
+IS_PRODUCTION = bool(os.getenv("COOLIFY_RESOURCE_UUID")) or os.getenv("ENV", "").lower() == "production"
 
 # Agent routing: müşteri hangi agent'a bağlı? Key: channel_account_id:external_user_id
 customer_agents: dict[str, int] = {}
@@ -40,7 +47,38 @@ def startup():
     if os.getenv("TELEGRAM_BOT_TOKEN"):
         base_url = os.getenv("BASE_URL", "https://agentapi.pusulamkendim.com")
         tg_setup_webhook(f"{base_url}/telegram/webhook")
+    if not ADMIN_SECRET:
+        message = "production'da dashboard/API kilitli" if IS_PRODUCTION else "dashboard/API auth devre dışı"
+        print(f"⚠️ ADMIN_PASSWORD/ADMIN_TOKEN yok; {message}.")
     print("✅ Multi-Agent başlatıldı! (WhatsApp + Telegram)")
+
+
+@app.middleware("http")
+async def protect_admin_surface(request: Request, call_next):
+    path = request.url.path
+    protected = path.startswith("/dashboard") or (path.startswith("/api/") and path not in {"/api/login"})
+    if protected and IS_PRODUCTION and not ADMIN_SECRET:
+        return JSONResponse({"error": "admin_auth_not_configured"}, status_code=503)
+    if protected and not _is_admin_request(request):
+        if path.startswith("/api/"):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return RedirectResponse(url="/login", status_code=303)
+    return await call_next(request)
+
+
+def _session_value() -> str:
+    return hmac.new(ADMIN_SECRET.encode(), b"agent-admin-session", hashlib.sha256).hexdigest()
+
+
+def _is_admin_request(request: Request) -> bool:
+    if not ADMIN_SECRET:
+        return not IS_PRODUCTION
+    cookie = request.cookies.get(ADMIN_COOKIE, "")
+    bearer = request.headers.get("authorization", "")
+    if bearer.lower().startswith("bearer "):
+        token = bearer.split(" ", 1)[1]
+        return secrets.compare_digest(token, ADMIN_SECRET)
+    return secrets.compare_digest(cookie, _session_value())
 
 
 @app.get("/webhook")
@@ -428,6 +466,41 @@ This service uses WhatsApp Business API by Meta Platforms, Inc.
 """
 
 
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    if _is_admin_request(request):
+        return RedirectResponse(url="/dashboard", status_code=303)
+    return templates.TemplateResponse(request, "login.html")
+
+
+@app.post("/api/login")
+async def login(request: Request):
+    data = await request.json()
+    password = data.get("password", "")
+    if IS_PRODUCTION and not ADMIN_SECRET:
+        return JSONResponse({"error": "admin_auth_not_configured"}, status_code=503)
+    if not ADMIN_SECRET or not secrets.compare_digest(password, ADMIN_SECRET):
+        return JSONResponse({"error": "invalid_credentials"}, status_code=401)
+
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        ADMIN_COOKIE,
+        _session_value(),
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        max_age=60 * 60 * 12,
+    )
+    return response
+
+
+@app.post("/logout")
+def logout():
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(ADMIN_COOKIE)
+    return response
+
+
 @app.get("/api/conversations")
 def get_conversations(phone: str = None):
     """Konuşma geçmişini görüntüle"""
@@ -529,6 +602,33 @@ def get_agents():
         db.close()
 
 
+@app.post("/api/agents")
+async def create_agent(request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        slug = (data.get("slug") or "").strip().lower()
+        if not slug:
+            return JSONResponse({"error": "slug_required"}, status_code=400)
+        if db.query(Agent).filter(Agent.slug == slug).first():
+            return JSONResponse({"error": "slug_exists"}, status_code=400)
+        agent = Agent(
+            slug=slug,
+            name=data.get("name") or slug,
+            type=data.get("type") or "generic_prompt",
+            model=data.get("model") or "gemini-2.5-flash",
+            system_prompt=data.get("system_prompt", ""),
+            knowledge_base=data.get("knowledge_base", ""),
+            active=data.get("active", True),
+        )
+        db.add(agent)
+        db.commit()
+        db.refresh(agent)
+        return {"ok": True, "id": agent.id}
+    finally:
+        db.close()
+
+
 @app.put("/api/agents/{agent_type}/config")
 async def update_agent_config(agent_type: str, request: Request):
     """Agent ayarlarını güncelle"""
@@ -556,6 +656,42 @@ async def update_agent_config(agent_type: str, request: Request):
         db.close()
 
 
+@app.delete("/api/agents/{agent_id}")
+def delete_agent(agent_id: int):
+    db = SessionLocal()
+    try:
+        agent = db.query(Agent).filter(Agent.id == agent_id).first()
+        if not agent:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        agent.active = False
+        db.query(Route).filter(Route.agent_id == agent.id).update({"active": False})
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/agents/{agent_id}/test")
+async def test_agent(agent_id: int, request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        agent = db.query(Agent).filter(Agent.id == agent_id).first()
+        if not agent:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if data.get("dry_run", True):
+            return {
+                "ok": True,
+                "agent": agent.slug,
+                "message": data.get("message", ""),
+                "response": f"[dry-run] {agent.name} mesajı alırdı.",
+            }
+        response = run_agent(agent, f"test_{agent.id}", data.get("message", "Merhaba"), db)
+        return {"ok": True, "agent": agent.slug, "response": response}
+    finally:
+        db.close()
+
+
 def _default_prompt_preview(agent_slug: str) -> str:
     if agent_slug == "retreat":
         return retreat_agent.SYSTEM_PROMPT[:2000]
@@ -563,6 +699,30 @@ def _default_prompt_preview(agent_slug: str) -> str:
         from app.agent import get_system_prompt
         return get_system_prompt("Lezzet Durağı")
     return ""
+
+
+def _mask_secret(value: str | None) -> str:
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "••••"
+    return f"{value[:2]}••••{value[-2:]}"
+
+
+def _mask_credentials(credentials_json: str | None) -> str:
+    if not credentials_json:
+        return "{}"
+    try:
+        data = json.loads(credentials_json)
+    except json.JSONDecodeError:
+        return "{}"
+    masked = {}
+    for key, value in data.items():
+        if key.endswith("_env") or key in {"phone_number_id", "bot_username"}:
+            masked[key] = value
+        else:
+            masked[key] = _mask_secret(str(value))
+    return json.dumps(masked, ensure_ascii=False)
 
 
 @app.get("/api/channels")
@@ -576,8 +736,9 @@ def get_channels():
             "name": c.name,
             "external_id": c.external_id,
             "display_identifier": c.display_identifier,
-            "credentials_json": c.credentials_json,
-            "webhook_secret": c.webhook_secret,
+            "credentials_json": _mask_credentials(c.credentials_json),
+            "credentials_raw_editable": False,
+            "webhook_secret": _mask_secret(c.webhook_secret),
             "active": c.active,
             "created_at": c.created_at.isoformat() if c.created_at else "",
             "updated_at": c.updated_at.isoformat() if c.updated_at else "",
@@ -617,8 +778,23 @@ async def update_channel(channel_id: int, request: Request):
         if not account:
             return {"error": "not found"}
         for field in ["channel_type", "name", "external_id", "display_identifier", "credentials_json", "webhook_secret", "active"]:
-            if field in data:
+            if field in data and data[field] != "__KEEP__":
                 setattr(account, field, data[field])
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.delete("/api/channels/{channel_id}")
+def delete_channel(channel_id: int):
+    db = SessionLocal()
+    try:
+        account = db.query(ChannelAccount).filter(ChannelAccount.id == channel_id).first()
+        if not account:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        account.active = False
+        db.query(Route).filter(Route.channel_account_id == account.id).update({"active": False})
         db.commit()
         return {"ok": True}
     finally:
@@ -679,6 +855,45 @@ async def update_route(route_id: int, request: Request):
                 setattr(route, field, data[field])
         db.commit()
         return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.delete("/api/routes/{route_id}")
+def delete_route(route_id: int):
+    db = SessionLocal()
+    try:
+        route = db.query(Route).filter(Route.id == route_id).first()
+        if not route:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        route.active = False
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/routes/simulate")
+async def simulate_route(request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        account = db.query(ChannelAccount).filter(ChannelAccount.id == data.get("channel_account_id")).first()
+        if not account:
+            return JSONResponse({"error": "channel_not_found"}, status_code=404)
+        resolution = resolve_route(db, account, data.get("message", ""), data.get("metadata") or {})
+        if not resolution:
+            return {"ok": True, "matched": False}
+        return {
+            "ok": True,
+            "matched": True,
+            "agent_id": resolution.agent.id,
+            "agent_slug": resolution.agent.slug,
+            "route_id": resolution.route.id if resolution.route else None,
+            "match_type": resolution.route.match_type if resolution.route else "",
+            "match_value": resolution.route.match_value if resolution.route else "",
+            "clean_text": resolution.clean_text,
+        }
     finally:
         db.close()
 

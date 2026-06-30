@@ -2,88 +2,194 @@
 {% block title %}Rotalar{% endblock %}
 
 {% block content %}
-<div class="mb-6">
-    <h2 class="text-2xl font-bold text-gray-900">Rotalar</h2>
-    <p class="text-gray-500 mt-1">Gelen mesajlari kanal ve eslesmeye gore agent'a bagla</p>
-</div>
-
-<div class="bg-white rounded-lg shadow p-6 mb-6">
-    <h3 class="font-semibold text-gray-900 mb-4">Yeni Route</h3>
-    <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <select id="channelSelect" class="border rounded px-3 py-2"></select>
-        <select id="agentSelect" class="border rounded px-3 py-2"></select>
-        <select id="matchType" class="border rounded px-3 py-2">
-            <option value="default">default</option>
-            <option value="prefix">prefix</option>
-            <option value="keyword">keyword</option>
-            <option value="exact">exact</option>
-            <option value="ad_source">ad_source</option>
-        </select>
-        <input id="matchValue" class="border rounded px-3 py-2" placeholder="INZIVA, LEZZET, ADS">
-        <input id="priority" type="number" class="border rounded px-3 py-2" value="100">
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h2 class="text-2xl font-semibold text-slate-900">Rotalar</h2>
+        <p class="text-slate-500 mt-1">Mesajlari kanal hesabi ve eslesme kuralina gore agent'a bagla</p>
     </div>
-    <button onclick="createRoute()" class="mt-4 bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Kaydet</button>
+    <button onclick="openRouteForm()" class="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700">Yeni route</button>
 </div>
 
-<div class="bg-white rounded-lg shadow overflow-hidden">
-    <table class="w-full text-sm">
-        <thead class="bg-gray-50 text-gray-600">
-            <tr>
-                <th class="text-left p-3">Kanal</th>
-                <th class="text-left p-3">Agent</th>
-                <th class="text-left p-3">Tip</th>
-                <th class="text-left p-3">Deger</th>
-                <th class="text-left p-3">Oncelik</th>
-                <th class="text-left p-3">Aktif</th>
-            </tr>
-        </thead>
-        <tbody id="routesBody"></tbody>
-    </table>
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+    <section class="xl:col-span-2 bg-white border border-slate-200 rounded-lg overflow-hidden">
+        <table class="w-full text-sm">
+            <thead class="bg-slate-50 text-slate-600">
+                <tr>
+                    <th class="text-left p-3">Kanal</th>
+                    <th class="text-left p-3">Agent</th>
+                    <th class="text-left p-3">Eslesme</th>
+                    <th class="text-left p-3">Oncelik</th>
+                    <th class="text-left p-3">Status</th>
+                    <th class="text-right p-3">Islem</th>
+                </tr>
+            </thead>
+            <tbody id="routesBody"></tbody>
+        </table>
+    </section>
+
+    <aside class="bg-white border border-slate-200 rounded-lg p-5 h-fit">
+        <h3 class="font-semibold mb-4">Route simulator</h3>
+        <div class="space-y-3">
+            <select id="simChannel" class="w-full border rounded-md px-3 py-2"></select>
+            <input id="simMessage" class="w-full border rounded-md px-3 py-2" placeholder="LEZZET merhaba">
+            <input id="simAdSource" class="w-full border rounded-md px-3 py-2" placeholder="ad_source">
+            <button onclick="simulateRoute()" class="w-full bg-slate-900 text-white rounded-md px-4 py-2 hover:bg-slate-800">Test et</button>
+            <pre id="simResult" class="bg-slate-50 border rounded-md p-3 text-xs overflow-auto min-h-24"></pre>
+        </div>
+    </aside>
 </div>
+
+<dialog id="routeDialog" class="rounded-lg w-full max-w-xl p-0 backdrop:bg-slate-950/50">
+    <form id="routeForm" class="bg-white p-6 space-y-4">
+        <div class="flex items-start justify-between">
+            <h3 id="routeFormTitle" class="text-lg font-semibold">Route</h3>
+            <button type="button" onclick="routeDialog.close()" class="text-slate-500 hover:text-slate-900">Kapat</button>
+        </div>
+        <input id="routeId" type="hidden">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Kanal</span>
+                <select id="channelSelect" class="w-full border rounded-md px-3 py-2"></select>
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Agent</span>
+                <select id="agentSelect" class="w-full border rounded-md px-3 py-2"></select>
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Match type</span>
+                <select id="matchType" class="w-full border rounded-md px-3 py-2">
+                    <option value="default">default</option>
+                    <option value="prefix">prefix</option>
+                    <option value="keyword">keyword</option>
+                    <option value="exact">exact</option>
+                    <option value="ad_source">ad_source</option>
+                </select>
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Match value</span>
+                <input id="matchValue" class="w-full border rounded-md px-3 py-2">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Oncelik</span>
+                <input id="priority" type="number" class="w-full border rounded-md px-3 py-2" value="100">
+            </label>
+            <label class="flex items-center gap-2 pt-7">
+                <input id="routeActive" type="checkbox" class="rounded">
+                <span class="text-sm font-medium">Aktif</span>
+            </label>
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+            <button type="button" onclick="routeDialog.close()" class="px-4 py-2 rounded-md border">Vazgec</button>
+            <button class="px-4 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700">Kaydet</button>
+        </div>
+    </form>
+</dialog>
 {% endblock %}
 
 {% block scripts %}
 <script>
 let channels = [];
 let agents = [];
+let routes = [];
+
+async function api(path, options = {}) {
+    const res = await fetch(path, options);
+    if (res.status === 401) location.href = '/login';
+    return res;
+}
 
 async function loadRefs() {
-    channels = await (await fetch('/api/channels')).json();
-    agents = await (await fetch('/api/agents')).json();
-    channelSelect.innerHTML = channels.map(c => `<option value="${c.id}">${c.name} (${c.channel_type})</option>`).join('');
+    channels = await (await api('/api/channels')).json();
+    agents = await (await api('/api/agents')).json();
+    const channelOptions = channels.map(c => `<option value="${c.id}">${c.name} (${c.channel_type})</option>`).join('');
+    channelSelect.innerHTML = channelOptions;
+    simChannel.innerHTML = channelOptions;
     agentSelect.innerHTML = agents.map(a => `<option value="${a.id}">${a.name} (${a.slug})</option>`).join('');
 }
 
 async function loadRoutes() {
-    const routes = await (await fetch('/api/routes')).json();
+    routes = await (await api('/api/routes')).json();
     routesBody.innerHTML = routes.map(r => `
-        <tr class="border-t">
+        <tr class="border-t border-slate-100">
             <td class="p-3">${r.channel_name}</td>
             <td class="p-3 font-medium">${r.agent_slug}</td>
-            <td class="p-3">${r.match_type}</td>
-            <td class="p-3">${r.match_value || '-'}</td>
+            <td class="p-3"><span class="font-mono">${r.match_type}</span> <span class="text-slate-500">${r.match_value || '-'}</span></td>
             <td class="p-3">${r.priority}</td>
-            <td class="p-3">${r.active ? 'Aktif' : 'Pasif'}</td>
+            <td class="p-3">${statusBadge(r.active)}</td>
+            <td class="p-3 text-right space-x-2">
+                <button onclick="openRouteForm(${r.id})" class="px-3 py-1.5 rounded border hover:bg-slate-50">Duzenle</button>
+                <button onclick="setRouteActive(${r.id}, ${!r.active})" class="px-3 py-1.5 rounded border hover:bg-slate-50">${r.active ? 'Pasif' : 'Aktif'}</button>
+                <button onclick="deleteRoute(${r.id})" class="px-3 py-1.5 rounded border border-red-200 text-red-700 hover:bg-red-50">Sil</button>
+            </td>
         </tr>
     `).join('');
 }
 
-async function createRoute() {
-    await fetch('/api/routes', {
+function statusBadge(active) {
+    return active
+        ? '<span class="inline-flex px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-xs font-medium">Aktif</span>'
+        : '<span class="inline-flex px-2 py-1 rounded bg-slate-100 text-slate-600 text-xs font-medium">Pasif</span>';
+}
+
+function openRouteForm(id = null) {
+    const r = routes.find(item => item.id === id);
+    routeFormTitle.textContent = r ? 'Route duzenle' : 'Yeni route';
+    routeId.value = r?.id || '';
+    channelSelect.value = r?.channel_account_id || channels[0]?.id || '';
+    agentSelect.value = r?.agent_id || agents[0]?.id || '';
+    matchType.value = r?.match_type || 'default';
+    matchValue.value = r?.match_value || '';
+    priority.value = r?.priority ?? 100;
+    routeActive.checked = r ? r.active : true;
+    routeDialog.showModal();
+}
+
+routeForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = {
+        channel_account_id: Number(channelSelect.value),
+        agent_id: Number(agentSelect.value),
+        match_type: matchType.value,
+        match_value: matchValue.value,
+        priority: Number(priority.value || 100),
+        active: routeActive.checked
+    };
+    const id = routeId.value;
+    await api(id ? `/api/routes/${id}` : '/api/routes', {
+        method: id ? 'PUT' : 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    });
+    routeDialog.close();
+    loadRoutes();
+});
+
+async function setRouteActive(id, active) {
+    await api(`/api/routes/${id}`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({active})
+    });
+    loadRoutes();
+}
+
+async function deleteRoute(id) {
+    if (!confirm('Route pasife alinsin mi?')) return;
+    await api(`/api/routes/${id}`, {method: 'DELETE'});
+    loadRoutes();
+}
+
+async function simulateRoute() {
+    const res = await api('/api/routes/simulate', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
-            channel_account_id: Number(channelSelect.value),
-            agent_id: Number(agentSelect.value),
-            match_type: matchType.value,
-            match_value: matchValue.value,
-            priority: Number(priority.value || 100),
-            active: true
+            channel_account_id: Number(simChannel.value),
+            message: simMessage.value,
+            metadata: {ad_source: simAdSource.value}
         })
     });
-    matchValue.value = '';
-    priority.value = 100;
-    loadRoutes();
+    simResult.textContent = JSON.stringify(await res.json(), null, 2);
 }
 
 loadRefs().then(loadRoutes);

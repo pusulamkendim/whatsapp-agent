@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Rotalar{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h2 class="text-2xl font-bold text-gray-900">Rotalar</h2>
+    <p class="text-gray-500 mt-1">Gelen mesajlari kanal ve eslesmeye gore agent'a bagla</p>
+</div>
+
+<div class="bg-white rounded-lg shadow p-6 mb-6">
+    <h3 class="font-semibold text-gray-900 mb-4">Yeni Route</h3>
+    <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <select id="channelSelect" class="border rounded px-3 py-2"></select>
+        <select id="agentSelect" class="border rounded px-3 py-2"></select>
+        <select id="matchType" class="border rounded px-3 py-2">
+            <option value="default">default</option>
+            <option value="prefix">prefix</option>
+            <option value="keyword">keyword</option>
+            <option value="exact">exact</option>
+            <option value="ad_source">ad_source</option>
+        </select>
+        <input id="matchValue" class="border rounded px-3 py-2" placeholder="INZIVA, LEZZET, ADS">
+        <input id="priority" type="number" class="border rounded px-3 py-2" value="100">
+    </div>
+    <button onclick="createRoute()" class="mt-4 bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Kaydet</button>
+</div>
+
+<div class="bg-white rounded-lg shadow overflow-hidden">
+    <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-gray-600">
+            <tr>
+                <th class="text-left p-3">Kanal</th>
+                <th class="text-left p-3">Agent</th>
+                <th class="text-left p-3">Tip</th>
+                <th class="text-left p-3">Deger</th>
+                <th class="text-left p-3">Oncelik</th>
+                <th class="text-left p-3">Aktif</th>
+            </tr>
+        </thead>
+        <tbody id="routesBody"></tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let channels = [];
+let agents = [];
+
+async function loadRefs() {
+    channels = await (await fetch('/api/channels')).json();
+    agents = await (await fetch('/api/agents')).json();
+    channelSelect.innerHTML = channels.map(c => `<option value="${c.id}">${c.name} (${c.channel_type})</option>`).join('');
+    agentSelect.innerHTML = agents.map(a => `<option value="${a.id}">${a.name} (${a.slug})</option>`).join('');
+}
+
+async function loadRoutes() {
+    const routes = await (await fetch('/api/routes')).json();
+    routesBody.innerHTML = routes.map(r => `
+        <tr class="border-t">
+            <td class="p-3">${r.channel_name}</td>
+            <td class="p-3 font-medium">${r.agent_slug}</td>
+            <td class="p-3">${r.match_type}</td>
+            <td class="p-3">${r.match_value || '-'}</td>
+            <td class="p-3">${r.priority}</td>
+            <td class="p-3">${r.active ? 'Aktif' : 'Pasif'}</td>
+        </tr>
+    `).join('');
+}
+
+async function createRoute() {
+    await fetch('/api/routes', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            channel_account_id: Number(channelSelect.value),
+            agent_id: Number(agentSelect.value),
+            match_type: matchType.value,
+            match_value: matchValue.value,
+            priority: Number(priority.value || 100),
+            active: true
+        })
+    });
+    matchValue.value = '';
+    priority.value = 100;
+    loadRoutes();
+}
+
+loadRefs().then(loadRoutes);
+</script>
+{% endblock %}

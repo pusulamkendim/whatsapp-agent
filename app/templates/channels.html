@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Kanallar{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h2 class="text-2xl font-bold text-gray-900">Kanallar</h2>
+    <p class="text-gray-500 mt-1">WhatsApp, Telegram ve Instagram hesaplari</p>
+</div>
+
+<div class="bg-white rounded-lg shadow p-6 mb-6">
+    <h3 class="font-semibold text-gray-900 mb-4">Yeni Kanal</h3>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <select id="channelType" class="border rounded px-3 py-2">
+            <option value="whatsapp">WhatsApp</option>
+            <option value="telegram">Telegram</option>
+            <option value="instagram">Instagram</option>
+        </select>
+        <input id="channelName" class="border rounded px-3 py-2" placeholder="Gorunen ad">
+        <input id="externalId" class="border rounded px-3 py-2" placeholder="phone_number_id / bot username / account id">
+        <input id="displayIdentifier" class="border rounded px-3 py-2" placeholder="Telefon, bot adi veya hesap">
+        <input id="webhookSecret" class="border rounded px-3 py-2" placeholder="Verify token">
+        <input id="credentialsJson" class="border rounded px-3 py-2 md:col-span-3" placeholder='{"access_token_env":"WHATSAPP_TOKEN"}'>
+    </div>
+    <button onclick="createChannel()" class="mt-4 bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Kaydet</button>
+</div>
+
+<div class="bg-white rounded-lg shadow overflow-hidden">
+    <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-gray-600">
+            <tr>
+                <th class="text-left p-3">Tip</th>
+                <th class="text-left p-3">Ad</th>
+                <th class="text-left p-3">External ID</th>
+                <th class="text-left p-3">Gorunen</th>
+                <th class="text-left p-3">Aktif</th>
+            </tr>
+        </thead>
+        <tbody id="channelsBody"></tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadChannels() {
+    const res = await fetch('/api/channels');
+    const channels = await res.json();
+    channelsBody.innerHTML = channels.map(c => `
+        <tr class="border-t">
+            <td class="p-3">${c.channel_type}</td>
+            <td class="p-3 font-medium">${c.name}</td>
+            <td class="p-3">${c.external_id}</td>
+            <td class="p-3">${c.display_identifier || '-'}</td>
+            <td class="p-3">${c.active ? 'Aktif' : 'Pasif'}</td>
+        </tr>
+    `).join('');
+}
+
+async function createChannel() {
+    await fetch('/api/channels', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            channel_type: channelType.value,
+            name: channelName.value,
+            external_id: externalId.value,
+            display_identifier: displayIdentifier.value,
+            webhook_secret: webhookSecret.value,
+            credentials_json: credentialsJson.value || '{}',
+            active: true
+        })
+    });
+    channelName.value = externalId.value = displayIdentifier.value = webhookSecret.value = credentialsJson.value = '';
+    loadChannels();
+}
+
+loadChannels();
+</script>
+{% endblock %}

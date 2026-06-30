@@ -34,7 +34,8 @@ tool_definitions = types.Tool(
     ]
 )
 
-SYSTEM_PROMPT = f"""Sen Samma Karuna'nın Koh Phangan Nefes ve Tantra İnzivası (23-30 Mayıs 2026) hakkında bilgi veren WhatsApp asistanısın.
+def build_system_prompt(knowledge_base: str) -> str:
+    return f"""Sen Samma Karuna'nın Koh Phangan Nefes ve Tantra İnzivası (23-30 Mayıs 2026) hakkında bilgi veren WhatsApp asistanısın.
 
 Görevin:
 - İnziva hakkında soruları samimi, sıcak ve bilgilendirici şekilde yanıtlamak
@@ -70,8 +71,11 @@ Tool çağrıldıktan sonra müşteriye "Bilgilerinizi ekibimize ilettim, Özgü
 
 BİLGİ BANKASI:
 
-{KNOWLEDGE_BASE}
+{knowledge_base}
 """
+
+
+SYSTEM_PROMPT = build_system_prompt(KNOWLEDGE_BASE)
 
 # Konuşma geçmişi
 conversations: dict[str, list] = {}

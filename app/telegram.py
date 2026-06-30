@@ -1,25 +1,43 @@
 import os
+import json
 import requests
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
-def send_message(chat_id: int | str, text: str):
+def _bot_token(channel_account=None) -> str:
+    if not channel_account:
+        return TELEGRAM_BOT_TOKEN
+
+    try:
+        refs = json.loads(channel_account.credentials_json or "{}")
+    except json.JSONDecodeError:
+        refs = {}
+
+    if refs.get("bot_token_env"):
+        return os.getenv(refs["bot_token_env"], TELEGRAM_BOT_TOKEN)
+    if refs.get("bot_token"):
+        return refs["bot_token"]
+    return TELEGRAM_BOT_TOKEN
+
+
+def send_message(chat_id: int | str, text: str, channel_account=None):
     """Telegram mesajı gönder"""
+    telegram_api = f"https://api.telegram.org/bot{_bot_token(channel_account)}"
     # tg_ prefix'ini çıkar
     chat_id = str(chat_id).removeprefix("tg_")
     # Uzun mesajları 4096 karaktere böl
     chunks = [text[i:i+4096] for i in range(0, len(text), 4096)]
     for chunk in chunks:
-        resp = requests.post(f"{TELEGRAM_API}/sendMessage", json={
+        resp = requests.post(f"{telegram_api}/sendMessage", json={
             "chat_id": chat_id,
             "text": chunk,
             "parse_mode": "Markdown",
         })
         if resp.status_code != 200:
             # Markdown parse hatası olursa düz text gönder
-            requests.post(f"{TELEGRAM_API}/sendMessage", json={
+            requests.post(f"{telegram_api}/sendMessage", json={
                 "chat_id": chat_id,
                 "text": chunk,
             })
@@ -46,9 +64,10 @@ def extract_message(payload: dict) -> tuple[str, str, str] | None:
         return None
 
 
-def setup_webhook(webhook_url: str):
+def setup_webhook(webhook_url: str, channel_account=None):
     """Telegram webhook'u ayarla"""
-    resp = requests.post(f"{TELEGRAM_API}/setWebhook", json={
+    telegram_api = f"https://api.telegram.org/bot{_bot_token(channel_account)}"
+    resp = requests.post(f"{telegram_api}/setWebhook", json={
         "url": webhook_url,
     })
     print(f"Telegram webhook: {resp.json()}")

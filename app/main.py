@@ -10,39 +10,20 @@ from app.database import init_db, SessionLocal
 from app.whatsapp import send_message as wa_send, extract_message as wa_extract
 from app.telegram import send_message as tg_send, extract_message as tg_extract, setup_webhook as tg_setup_webhook
 from app.instagram import send_message as ig_send, extract_message as ig_extract
-from app.agent import chat as restaurant_chat
 from app import retreat_agent
-from app.retreat_agent import chat as retreat_chat
-from app.models import Conversation, DailyStat, Handoff
+from app.agent_registry import run_agent
+from app.models import Agent, ChannelAccount, Conversation, DailyStat, Handoff, Route
+from app.router import find_channel_account, resolve_route
 
 app = FastAPI(title="WhatsApp Multi-Agent")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
-# Agent config (runtime'da degistirilebilir)
-agent_configs = {
-    "retreat": {"name": "Inziva Agent", "active": True, "model": "gemini-2.5-flash"},
-    "restaurant": {"name": "Restoran Agent", "active": True, "model": "gemini-2.5-flash"},
-}
-
-# Agent routing: müşteri hangi agent'a bağlı?
-customer_agents: dict[str, str] = {}
+# Agent routing: müşteri hangi agent'a bağlı? Key: channel_account_id:external_user_id
+customer_agents: dict[str, int] = {}
 
 # İşlenmiş mesaj ID'leri (duplicate önleme)
 processed_messages: OrderedDict[str, bool] = OrderedDict()
 MAX_PROCESSED = 1000
-
-# Agent kodları (click-to-chat linki ile gelen ilk mesaj)
-AGENT_CODES = {
-    "LEZZET": "restaurant",
-    "INZIVA": "retreat",
-    "RETREAT": "retreat",
-    "SAMMA": "retreat",
-}
-
-# Restoran ayarları
-RESTAURANT_ID = 1
-RESTAURANT_NAME = "Lezzet Durağı"
-
 
 @app.on_event("startup")
 def startup():
@@ -75,39 +56,35 @@ def verify_webhook(
     return PlainTextResponse(content="Forbidden", status_code=403)
 
 
-def detect_agent(sender: str, text: str) -> str:
-    """Mesajdan agent tipini belirle"""
-    # Zaten bir agent'a atanmış mı?
-    if sender in customer_agents:
-        return customer_agents[sender]
-
-    # İlk mesajdaki koda bak
-    first_word = text.strip().upper().split()[0] if text.strip() else ""
-    for code, agent_type in AGENT_CODES.items():
-        if first_word.startswith(code):
-            customer_agents[sender] = agent_type
-            return agent_type
-
-    # Varsayılan: retreat (şu anki aktif kampanya)
-    customer_agents[sender] = "retreat"
-    return "retreat"
-
-
 # Bugün yazanları takip (unique user + new user kontrolü)
 daily_seen_users: dict[str, set] = {}  # date_str -> set of phones
 all_known_users: set = set()
 
 
-def save_message(sender: str, agent_type: str, role: str, message: str, msg_id: str = ""):
+def save_message(
+    sender: str,
+    agent_type: str,
+    role: str,
+    message: str,
+    msg_id: str = "",
+    channel_type: str = "whatsapp",
+    channel_account_id: int | None = None,
+    agent_id: int | None = None,
+):
     """Mesajı DB'ye kaydet + günlük istatistik güncelle"""
     db = SessionLocal()
     try:
         # Konuşmayı kaydet
         db.add(Conversation(
+            channel_type=channel_type,
+            channel_account_id=channel_account_id,
+            agent_id=agent_id,
+            external_user_id=sender,
             customer_phone=sender,
             agent_type=agent_type,
             role=role,
             message=message,
+            external_msg_id=msg_id,
             msg_id=msg_id,
         ))
 
@@ -149,35 +126,119 @@ def save_message(sender: str, agent_type: str, role: str, message: str, msg_id: 
         db.close()
 
 
-def process_message(sender: str, clean_text: str, agent_type: str, msg_id: str = "", channel: str = "whatsapp"):
+def process_message(
+    sender: str,
+    clean_text: str,
+    agent_id: int,
+    channel_account_id: int,
+    msg_id: str = "",
+):
     """Mesajı arka planda işle"""
-    # Kullanıcı mesajını kaydet
-    save_message(sender, agent_type, "user", clean_text, msg_id)
-
-    # Kanal bazlı mesaj gönderme
-    send_fns = {"whatsapp": wa_send, "telegram": tg_send, "instagram": ig_send}
-    send_fn = send_fns.get(channel, wa_send)
+    db = SessionLocal()
+    channel_account = None
+    agent = None
 
     try:
-        if agent_type == "restaurant":
-            db = SessionLocal()
-            try:
-                response = restaurant_chat(sender, clean_text, RESTAURANT_ID, RESTAURANT_NAME, db)
-            finally:
-                db.close()
-        elif agent_type == "retreat":
-            response = retreat_chat(sender, clean_text)
-        else:
-            response = "Bir sorun oluştu."
+        channel_account = db.query(ChannelAccount).filter(ChannelAccount.id == channel_account_id).first()
+        agent = db.query(Agent).filter(Agent.id == agent_id).first()
+        if not channel_account or not agent:
+            print("❌ Channel account veya agent bulunamadı")
+            return
+
+        agent_type = agent.slug
+        channel = channel_account.channel_type
+
+        # Kullanıcı mesajını kaydet
+        save_message(sender, agent_type, "user", clean_text, msg_id, channel, channel_account.id, agent.id)
+
+        response = run_agent(agent, sender, clean_text, db)
 
         # Agent cevabını kaydet
-        save_message(sender, agent_type, "agent", response)
+        save_message(sender, agent_type, "agent", response, "", channel, channel_account.id, agent.id)
 
         print(f"🤖 [{agent_type}/{channel}] Cevap: {response}")
-        send_fn(sender, response)
+        _send_via_channel(channel_account, sender, response)
     except Exception as e:
         print(f"❌ Hata: {e}")
-        send_fn(sender, "Bir sorun oluştu, lütfen tekrar deneyin.")
+        if channel_account:
+            _send_via_channel(channel_account, sender, "Bir sorun oluştu, lütfen tekrar deneyin.")
+    finally:
+        db.close()
+
+
+def _send_via_channel(channel_account: ChannelAccount, sender: str, response: str):
+    send_fns = {"whatsapp": wa_send, "telegram": tg_send, "instagram": ig_send}
+    send_fn = send_fns.get(channel_account.channel_type, wa_send)
+    send_fn(sender, response, channel_account=channel_account)
+
+
+def _is_duplicate(msg_id: str) -> bool:
+    if not msg_id:
+        return False
+
+    if msg_id in processed_messages:
+        return True
+
+    db_check = SessionLocal()
+    try:
+        existing = db_check.query(Conversation).filter(
+            (Conversation.external_msg_id == msg_id) | (Conversation.msg_id == msg_id)
+        ).first()
+        return bool(existing)
+    finally:
+        db_check.close()
+
+
+def _mark_processed(msg_id: str):
+    if not msg_id:
+        return
+    processed_messages[msg_id] = True
+    if len(processed_messages) > MAX_PROCESSED:
+        processed_messages.popitem(last=False)
+
+
+def _resolve_inbound(channel_type: str, account_external_id: str, sender: str, text: str, metadata: dict | None = None):
+    db = SessionLocal()
+    try:
+        channel_account = find_channel_account(db, channel_type, account_external_id)
+        if not channel_account:
+            return None
+
+        user_key = f"{channel_account.id}:{sender}"
+        if user_key in customer_agents:
+            agent = db.query(Agent).filter(Agent.id == customer_agents[user_key], Agent.active == True).first()
+            if agent:
+                return {
+                    "channel_account_id": channel_account.id,
+                    "agent_id": agent.id,
+                    "agent_slug": agent.slug,
+                    "clean_text": text,
+                }
+
+        resolution = resolve_route(db, channel_account, text, metadata)
+        if not resolution:
+            return None
+
+        customer_agents[user_key] = resolution.agent.id
+        return {
+            "channel_account_id": resolution.channel_account.id,
+            "agent_id": resolution.agent.id,
+            "agent_slug": resolution.agent.slug,
+            "clean_text": resolution.clean_text,
+        }
+    finally:
+        db.close()
+
+
+def _has_customer_agent(channel_type: str, account_external_id: str, sender: str) -> bool:
+    db = SessionLocal()
+    try:
+        channel_account = find_channel_account(db, channel_type, account_external_id)
+        if not channel_account:
+            return False
+        return f"{channel_account.id}:{sender}" in customer_agents
+    finally:
+        db.close()
 
 
 @app.post("/webhook")
@@ -192,50 +253,36 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     if not result:
         return {"status": "ignored"}
 
-    sender, text, msg_id = result
+    sender, text, msg_id, phone_number_id = result
 
     # Kendi business numaramızdan gelen mesajları işleme
     if sender == "905428078429":
         print(f"⏭️ Kendi numaramızdan mesaj, atlanıyor")
         return {"status": "self_message"}
 
-    # Duplicate mesaj kontrolü (memory + DB)
-    if msg_id in processed_messages:
-        print(f"⏭️ Duplicate mesaj atlandı (memory): {msg_id}")
+    if _is_duplicate(msg_id):
+        print(f"⏭️ Duplicate mesaj atlandı: {msg_id}")
+        _mark_processed(msg_id)
         return {"status": "duplicate"}
 
-    # DB'den de kontrol et (restart sonrası memory boş olabilir)
-    if msg_id:
-        db_check = SessionLocal()
-        try:
-            existing = db_check.query(Conversation).filter(Conversation.msg_id == msg_id).first()
-            if existing:
-                print(f"⏭️ Duplicate mesaj atlandı (DB): {msg_id}")
-                processed_messages[msg_id] = True
-                return {"status": "duplicate"}
-        finally:
-            db_check.close()
+    resolved = _resolve_inbound("whatsapp", phone_number_id, sender, text)
+    if not resolved:
+        print(f"⚠️ WhatsApp kanal/route bulunamadı: {phone_number_id}")
+        return {"status": "no_route"}
 
-    processed_messages[msg_id] = True
-    if len(processed_messages) > MAX_PROCESSED:
-        processed_messages.popitem(last=False)
+    _mark_processed(msg_id)
 
-    agent_type = detect_agent(sender, text)
-
-    # Agent kodunu mesajdan çıkar (ilk mesajda)
-    clean_text = text
-    first_word = text.strip().upper().split()[0] if text.strip() else ""
-    for code in AGENT_CODES:
-        if first_word.startswith(code):
-            clean_text = text[len(first_word):].strip()
-            if not clean_text:
-                clean_text = "Merhaba"
-            break
-
-    print(f"📩 [{agent_type}] {sender} → {clean_text}")
+    print(f"📩 [whatsapp/{resolved['agent_slug']}] {sender} → {resolved['clean_text']}")
 
     # Hemen 200 dön, mesajı arka planda işle (Meta timeout'a takılmasın)
-    background_tasks.add_task(process_message, sender, clean_text, agent_type, msg_id, "whatsapp")
+    background_tasks.add_task(
+        process_message,
+        sender,
+        resolved["clean_text"],
+        resolved["agent_id"],
+        resolved["channel_account_id"],
+        msg_id,
+    )
 
     return {"status": "ok"}
 
@@ -252,38 +299,27 @@ async def handle_telegram_webhook(request: Request, background_tasks: Background
     chat_id, text, msg_id = result
     msg_id = f"tg_{msg_id}"  # WhatsApp msg_id ile karışmasın
 
-    # Duplicate kontrolü
-    if msg_id in processed_messages:
+    if _is_duplicate(msg_id):
+        _mark_processed(msg_id)
         return {"status": "duplicate"}
 
-    if msg_id:
-        db_check = SessionLocal()
-        try:
-            existing = db_check.query(Conversation).filter(Conversation.msg_id == msg_id).first()
-            if existing:
-                processed_messages[msg_id] = True
-                return {"status": "duplicate"}
-        finally:
-            db_check.close()
+    resolved = _resolve_inbound("telegram", "", f"tg_{chat_id}", text)
+    if not resolved:
+        print("⚠️ Telegram kanal/route bulunamadı")
+        return {"status": "no_route"}
 
-    processed_messages[msg_id] = True
-    if len(processed_messages) > MAX_PROCESSED:
-        processed_messages.popitem(last=False)
+    _mark_processed(msg_id)
 
-    agent_type = detect_agent(f"tg_{chat_id}", text)
+    print(f"📩 [telegram/{resolved['agent_slug']}] {chat_id} → {resolved['clean_text']}")
 
-    clean_text = text
-    first_word = text.strip().upper().split()[0] if text.strip() else ""
-    for code in AGENT_CODES:
-        if first_word.startswith(code):
-            clean_text = text[len(first_word):].strip()
-            if not clean_text:
-                clean_text = "Merhaba"
-            break
-
-    print(f"📩 [TG/{agent_type}] {chat_id} → {clean_text}")
-
-    background_tasks.add_task(process_message, f"tg_{chat_id}", clean_text, agent_type, msg_id, "telegram")
+    background_tasks.add_task(
+        process_message,
+        f"tg_{chat_id}",
+        resolved["clean_text"],
+        resolved["agent_id"],
+        resolved["channel_account_id"],
+        msg_id,
+    )
 
     return {"status": "ok"}
 
@@ -310,53 +346,53 @@ async def handle_instagram_webhook(request: Request, background_tasks: Backgroun
     if not result:
         return {"status": "ignored"}
 
-    sender_id, text, msg_id, is_from_ad = result
+    sender_id, text, msg_id, is_from_ad, account_id = result
     msg_id = f"ig_{msg_id}"
 
-    # Sadece reklamdan gelen mesajları işle
-    # İlk mesaj reklamdan geldiyse, o kullanıcıyı "ad_users" olarak kaydet
-    # Sonraki mesajları da işle (aynı konuşma devam ediyor)
-    ad_user_key = f"ig_{sender_id}"
+    if _is_duplicate(msg_id):
+        _mark_processed(msg_id)
+        return {"status": "duplicate"}
 
-    if is_from_ad:
-        customer_agents[ad_user_key] = "retreat"  # Reklamdan gelen → retreat agent
-        print(f"📢 Instagram reklamdan mesaj: {sender_id}")
-    elif ad_user_key not in customer_agents:
-        # Reklamdan gelmeyen ve daha önce reklamdan da gelmemiş → atla
+    instagram_sender = f"ig_{sender_id}"
+    if not is_from_ad and not _has_customer_agent("instagram", account_id, instagram_sender):
         print(f"⏭️ Instagram organik mesaj atlandı: {sender_id}")
         return {"status": "not_from_ad"}
 
-    # Duplicate kontrolü
-    if msg_id in processed_messages:
-        return {"status": "duplicate"}
+    metadata = {"ad_source": "ADS" if is_from_ad else "", "is_from_ad": is_from_ad}
+    resolved = _resolve_inbound("instagram", account_id, instagram_sender, text, metadata)
+    if not resolved:
+        print(f"⏭️ Instagram mesaj için kanal/route bulunamadı: {sender_id}")
+        return {"status": "no_route"}
 
-    if msg_id:
-        db_check = SessionLocal()
-        try:
-            existing = db_check.query(Conversation).filter(Conversation.msg_id == msg_id).first()
-            if existing:
-                processed_messages[msg_id] = True
-                return {"status": "duplicate"}
-        finally:
-            db_check.close()
+    _mark_processed(msg_id)
 
-    processed_messages[msg_id] = True
-    if len(processed_messages) > MAX_PROCESSED:
-        processed_messages.popitem(last=False)
+    print(f"📩 [instagram/{resolved['agent_slug']}] {sender_id} → {resolved['clean_text']}")
 
-    print(f"📩 [IG/retreat] {sender_id} → {text}")
-
-    background_tasks.add_task(process_message, ad_user_key, text, "retreat", msg_id, "instagram")
+    background_tasks.add_task(
+        process_message,
+        instagram_sender,
+        resolved["clean_text"],
+        resolved["agent_id"],
+        resolved["channel_account_id"],
+        msg_id,
+    )
 
     return {"status": "ok"}
 
 
 @app.get("/")
 def root():
+    db = SessionLocal()
+    try:
+        agents = [a.slug for a in db.query(Agent).filter(Agent.active == True).order_by(Agent.id).all()]
+        routes = db.query(Route).filter(Route.active == True).count()
+    finally:
+        db.close()
+
     return {
         "status": "running",
-        "agents": ["restaurant", "retreat"],
-        "routing": dict(AGENT_CODES),
+        "agents": agents,
+        "routes": routes,
     }
 
 
@@ -404,6 +440,10 @@ def get_conversations(phone: str = None):
         return [{
             "id": m.id,
             "phone": m.customer_phone,
+            "external_user_id": m.external_user_id or m.customer_phone,
+            "channel_type": m.channel_type,
+            "channel_account_id": m.channel_account_id,
+            "agent_id": m.agent_id,
             "agent": m.agent_type,
             "role": m.role,
             "message": m.message,
@@ -472,35 +512,175 @@ async def update_handoff(handoff_id: int, request: Request):
 @app.get("/api/agents")
 def get_agents():
     """Agent listesi ve ayarları"""
-    result = []
-    for agent_type, config in agent_configs.items():
-        prompt = ""
-        if agent_type == "retreat":
-            prompt = retreat_agent.SYSTEM_PROMPT[:2000]
-        elif agent_type == "restaurant":
-            from app.agent import get_system_prompt
-            prompt = get_system_prompt("Lezzet Durağı")
-        result.append({
-            "type": agent_type,
-            "name": config["name"],
-            "active": config["active"],
-            "model": config["model"],
-            "system_prompt": prompt,
-        })
-    return result
+    db = SessionLocal()
+    try:
+        agents = db.query(Agent).order_by(Agent.id.asc()).all()
+        return [{
+            "id": a.id,
+            "slug": a.slug,
+            "type": a.type,
+            "name": a.name,
+            "active": a.active,
+            "model": a.model,
+            "system_prompt": a.system_prompt or _default_prompt_preview(a.slug),
+            "knowledge_base": a.knowledge_base or "",
+        } for a in agents]
+    finally:
+        db.close()
 
 
 @app.put("/api/agents/{agent_type}/config")
 async def update_agent_config(agent_type: str, request: Request):
     """Agent ayarlarını güncelle"""
-    if agent_type not in agent_configs:
-        return {"error": "unknown agent"}
     data = await request.json()
-    if "active" in data:
-        agent_configs[agent_type]["active"] = data["active"]
-    if "system_prompt" in data and agent_type == "retreat":
-        retreat_agent.SYSTEM_PROMPT = data["system_prompt"]
-    return {"ok": True}
+    db = SessionLocal()
+    try:
+        agent = db.query(Agent).filter(Agent.slug == agent_type).first()
+        if not agent:
+            return {"error": "unknown agent"}
+        if "active" in data:
+            agent.active = data["active"]
+        if "name" in data:
+            agent.name = data["name"]
+        if "model" in data:
+            agent.model = data["model"]
+        if "system_prompt" in data:
+            agent.system_prompt = data["system_prompt"]
+            if agent.slug == "retreat":
+                retreat_agent.SYSTEM_PROMPT = data["system_prompt"]
+        if "knowledge_base" in data:
+            agent.knowledge_base = data["knowledge_base"]
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+def _default_prompt_preview(agent_slug: str) -> str:
+    if agent_slug == "retreat":
+        return retreat_agent.SYSTEM_PROMPT[:2000]
+    if agent_slug == "restaurant":
+        from app.agent import get_system_prompt
+        return get_system_prompt("Lezzet Durağı")
+    return ""
+
+
+@app.get("/api/channels")
+def get_channels():
+    db = SessionLocal()
+    try:
+        accounts = db.query(ChannelAccount).order_by(ChannelAccount.id.asc()).all()
+        return [{
+            "id": c.id,
+            "channel_type": c.channel_type,
+            "name": c.name,
+            "external_id": c.external_id,
+            "display_identifier": c.display_identifier,
+            "credentials_json": c.credentials_json,
+            "webhook_secret": c.webhook_secret,
+            "active": c.active,
+            "created_at": c.created_at.isoformat() if c.created_at else "",
+            "updated_at": c.updated_at.isoformat() if c.updated_at else "",
+        } for c in accounts]
+    finally:
+        db.close()
+
+
+@app.post("/api/channels")
+async def create_channel(request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        account = ChannelAccount(
+            channel_type=data["channel_type"],
+            name=data["name"],
+            external_id=data["external_id"],
+            display_identifier=data.get("display_identifier", ""),
+            credentials_json=data.get("credentials_json", "{}"),
+            webhook_secret=data.get("webhook_secret", ""),
+            active=data.get("active", True),
+        )
+        db.add(account)
+        db.commit()
+        db.refresh(account)
+        return {"ok": True, "id": account.id}
+    finally:
+        db.close()
+
+
+@app.put("/api/channels/{channel_id}")
+async def update_channel(channel_id: int, request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        account = db.query(ChannelAccount).filter(ChannelAccount.id == channel_id).first()
+        if not account:
+            return {"error": "not found"}
+        for field in ["channel_type", "name", "external_id", "display_identifier", "credentials_json", "webhook_secret", "active"]:
+            if field in data:
+                setattr(account, field, data[field])
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.get("/api/routes")
+def get_routes():
+    db = SessionLocal()
+    try:
+        routes = db.query(Route).order_by(Route.channel_account_id.asc(), Route.priority.asc()).all()
+        return [{
+            "id": r.id,
+            "channel_account_id": r.channel_account_id,
+            "channel_name": r.channel_account.name if r.channel_account else "",
+            "agent_id": r.agent_id,
+            "agent_slug": r.agent.slug if r.agent else "",
+            "priority": r.priority,
+            "match_type": r.match_type,
+            "match_value": r.match_value,
+            "active": r.active,
+        } for r in routes]
+    finally:
+        db.close()
+
+
+@app.post("/api/routes")
+async def create_route(request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        route = Route(
+            channel_account_id=data["channel_account_id"],
+            agent_id=data["agent_id"],
+            priority=data.get("priority", 100),
+            match_type=data.get("match_type", "default"),
+            match_value=data.get("match_value", ""),
+            active=data.get("active", True),
+        )
+        db.add(route)
+        db.commit()
+        db.refresh(route)
+        return {"ok": True, "id": route.id}
+    finally:
+        db.close()
+
+
+@app.put("/api/routes/{route_id}")
+async def update_route(route_id: int, request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        route = db.query(Route).filter(Route.id == route_id).first()
+        if not route:
+            return {"error": "not found"}
+        for field in ["channel_account_id", "agent_id", "priority", "match_type", "match_value", "active"]:
+            if field in data:
+                setattr(route, field, data[field])
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
 
 
 @app.get("/api/knowledge")
@@ -524,7 +704,7 @@ async def update_knowledge(request: Request):
     # Retreat agent'ın system prompt'unu yeniden yükle
     with open(kb_path, "r", encoding="utf-8") as f:
         retreat_agent.KNOWLEDGE_BASE = f.read()
-    retreat_agent.SYSTEM_PROMPT = retreat_agent.SYSTEM_PROMPT  # trigger reload if needed
+    retreat_agent.SYSTEM_PROMPT = retreat_agent.build_system_prompt(retreat_agent.KNOWLEDGE_BASE)
     return {"ok": True}
 
 
@@ -532,24 +712,34 @@ async def update_knowledge(request: Request):
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard_page(request: Request):
-    return templates.TemplateResponse("dashboard.html", {"request": request, "active": "dashboard"})
+    return templates.TemplateResponse(request, "dashboard.html", {"active": "dashboard"})
 
 
 @app.get("/dashboard/conversations", response_class=HTMLResponse)
 def conversations_page(request: Request):
-    return templates.TemplateResponse("conversations.html", {"request": request, "active": "conversations"})
+    return templates.TemplateResponse(request, "conversations.html", {"active": "conversations"})
 
 
 @app.get("/dashboard/handoffs", response_class=HTMLResponse)
 def handoffs_page(request: Request):
-    return templates.TemplateResponse("handoffs.html", {"request": request, "active": "handoffs"})
+    return templates.TemplateResponse(request, "handoffs.html", {"active": "handoffs"})
 
 
 @app.get("/dashboard/agents", response_class=HTMLResponse)
 def agents_page(request: Request):
-    return templates.TemplateResponse("agents.html", {"request": request, "active": "agents"})
+    return templates.TemplateResponse(request, "agents.html", {"active": "agents"})
+
+
+@app.get("/dashboard/channels", response_class=HTMLResponse)
+def channels_page(request: Request):
+    return templates.TemplateResponse(request, "channels.html", {"active": "channels"})
+
+
+@app.get("/dashboard/routes", response_class=HTMLResponse)
+def routes_page(request: Request):
+    return templates.TemplateResponse(request, "routes.html", {"active": "routes"})
 
 
 @app.get("/dashboard/knowledge", response_class=HTMLResponse)
 def knowledge_page(request: Request):
-    return templates.TemplateResponse("knowledge.html", {"request": request, "active": "knowledge"})
+    return templates.TemplateResponse(request, "knowledge.html", {"active": "knowledge"})

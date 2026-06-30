@@ -1,17 +1,34 @@
 import os
+import json
 import requests
 
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
 
 
-def send_message(recipient_id: str, text: str):
+def _access_token(channel_account=None) -> str:
+    if not channel_account:
+        return INSTAGRAM_ACCESS_TOKEN
+
+    try:
+        refs = json.loads(channel_account.credentials_json or "{}")
+    except json.JSONDecodeError:
+        refs = {}
+
+    if refs.get("access_token_env"):
+        return os.getenv(refs["access_token_env"], INSTAGRAM_ACCESS_TOKEN)
+    if refs.get("access_token"):
+        return refs["access_token"]
+    return INSTAGRAM_ACCESS_TOKEN
+
+
+def send_message(recipient_id: str, text: str, channel_account=None):
     """Instagram DM gönder"""
     # ig_ prefix'ini çıkar
     recipient_id = str(recipient_id).removeprefix("ig_")
 
     url = f"https://graph.facebook.com/v22.0/me/messages"
     headers = {
-        "Authorization": f"Bearer {INSTAGRAM_ACCESS_TOKEN}",
+        "Authorization": f"Bearer {_access_token(channel_account)}",
         "Content-Type": "application/json",
     }
 
@@ -29,8 +46,8 @@ def send_message(recipient_id: str, text: str):
             print(f"Instagram mesaj gönderildi → {recipient_id}")
 
 
-def extract_message(payload: dict) -> tuple[str, str, str, bool] | None:
-    """Instagram webhook payload'dan sender_id, mesaj, msg_id ve reklamdan mı geldiğini çıkar"""
+def extract_message(payload: dict) -> tuple[str, str, str, bool, str] | None:
+    """Instagram webhook payload'dan sender_id, mesaj, msg_id, reklam bilgisi ve account id çıkar"""
     try:
         if payload.get("object") != "instagram":
             return None
@@ -38,6 +55,7 @@ def extract_message(payload: dict) -> tuple[str, str, str, bool] | None:
         entry = payload["entry"][0]
         messaging = entry["messaging"][0]
 
+        account_id = str(entry.get("id", ""))
         sender_id = messaging["sender"]["id"]
         msg_id = ""
         text = ""
@@ -57,6 +75,6 @@ def extract_message(payload: dict) -> tuple[str, str, str, bool] | None:
         if not text:
             return None
 
-        return sender_id, text, msg_id, is_from_ad
+        return sender_id, text, msg_id, is_from_ad, account_id
     except (KeyError, IndexError):
         return None

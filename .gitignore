@@ -4,3 +4,4 @@ __pycache__/
 *.db
 .DS_Store
 retreat_docs/*.pdf
+CHEATSHEET.md

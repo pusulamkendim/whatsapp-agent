@@ -42,8 +42,15 @@ MODEL_OPTIONS = [
     },
     {
         "provider": "openrouter",
-        "label": "OpenRouter Free Model",
-        "model": "openrouter:deepseek/deepseek-chat-v3-0324:free",
+        "label": "OpenRouter GPT OSS 20B Free",
+        "model": "openrouter:openai/gpt-oss-20b:free",
+        "env": "OPENROUTER_API_KEY",
+        "notes": "OpenRouter free variant; availability can change",
+    },
+    {
+        "provider": "openrouter",
+        "label": "OpenRouter Llama 3.3 70B Free",
+        "model": "openrouter:meta-llama/llama-3.3-70b-instruct:free",
         "env": "OPENROUTER_API_KEY",
         "notes": "OpenRouter free variant; availability can change",
     },
@@ -103,7 +110,9 @@ def openai_compatible_chat(
         json=payload,
         timeout=60,
     )
-    response.raise_for_status()
+    if not response.ok:
+        detail = response.text[:500] if response.text else response.reason
+        raise RuntimeError(f"{provider}:{model} HTTP {response.status_code}: {detail}")
     data = response.json()
     return data["choices"][0]["message"]
 

@@ -258,7 +258,18 @@ def _resolve_inbound(channel_type: str, account_external_id: str, sender: str, t
         if not channel_account:
             return None
 
+        resolution = resolve_route(db, channel_account, text, metadata)
         user_key = f"{channel_account.id}:{sender}"
+
+        if resolution and resolution.route and resolution.route.match_type != "default":
+            customer_agents[user_key] = resolution.agent.id
+            return {
+                "channel_account_id": resolution.channel_account.id,
+                "agent_id": resolution.agent.id,
+                "agent_slug": resolution.agent.slug,
+                "clean_text": resolution.clean_text,
+            }
+
         if user_key in customer_agents:
             agent = db.query(Agent).filter(Agent.id == customer_agents[user_key], Agent.active == True).first()
             if agent:
@@ -269,7 +280,6 @@ def _resolve_inbound(channel_type: str, account_external_id: str, sender: str, t
                     "clean_text": text,
                 }
 
-        resolution = resolve_route(db, channel_account, text, metadata)
         if not resolution:
             return None
 

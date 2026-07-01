@@ -8,3 +8,4 @@ pydantic
 jinja2
 python-multipart
 requests
+alembic

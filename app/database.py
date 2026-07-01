@@ -25,8 +25,21 @@ def get_db():
 def init_db():
     import app.models  # noqa: F401 - register SQLAlchemy models before create_all
     Base.metadata.create_all(bind=engine)
+    _run_alembic_migrations()
     _ensure_conversation_columns()
     _seed_platform_defaults()
+    _seed_llm_catalog()
+
+
+def _run_alembic_migrations():
+    try:
+        from alembic import command
+        from alembic.config import Config
+
+        config = Config("alembic.ini")
+        command.upgrade(config, "head")
+    except Exception as exc:
+        print(f"⚠️ Alembic migration hatası: {exc}")
 
 
 def _ensure_conversation_columns():
@@ -191,6 +204,81 @@ def _seed_platform_defaults():
     except Exception as exc:
         db.rollback()
         print(f"⚠️ Platform default seed hatası: {exc}")
+    finally:
+        db.close()
+
+
+def _seed_llm_catalog():
+    from datetime import datetime, timezone
+    from app.llm import MODEL_OPTIONS
+    from app.models import LlmModel, LlmProvider
+
+    provider_defaults = {
+        "gemini": {
+            "name": "Google Gemini",
+            "base_url": "",
+            "api_key_env": "GEMINI_API_KEY",
+        },
+        "deepseek": {
+            "name": "DeepSeek",
+            "base_url": "https://api.deepseek.com",
+            "api_key_env": "DEEPSEEK_API_KEY",
+        },
+        "openrouter": {
+            "name": "OpenRouter",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key_env": "OPENROUTER_API_KEY",
+        },
+        "ollama": {
+            "name": "Ollama",
+            "base_url": "http://localhost:11434/v1",
+            "api_key_env": "OLLAMA_BASE_URL",
+        },
+        "openai": {
+            "name": "OpenAI Compatible",
+            "base_url": "https://api.openai.com/v1",
+            "api_key_env": "OPENAI_API_KEY",
+        },
+    }
+
+    db = SessionLocal()
+    try:
+        providers: dict[str, LlmProvider] = {}
+        for slug, defaults in provider_defaults.items():
+            provider = db.query(LlmProvider).filter(LlmProvider.slug == slug).first()
+            if not provider:
+                provider = LlmProvider(slug=slug, **defaults, active=True)
+                db.add(provider)
+                db.flush()
+            providers[slug] = provider
+
+        for option in MODEL_OPTIONS:
+            provider_slug = option["provider"]
+            provider = providers.get(provider_slug)
+            if not provider:
+                continue
+            model = db.query(LlmModel).filter(LlmModel.model_ref == option["model"]).first()
+            if not model:
+                model = LlmModel(
+                    provider_id=provider.id,
+                    slug=option["model"].split(":", 1)[1],
+                    display_name=option["label"],
+                    model_ref=option["model"],
+                    supports_tools=provider_slug in {"gemini", "openrouter", "deepseek", "openai", "ollama"},
+                    is_default=option["model"] == "gemini:gemini-2.5-flash",
+                    notes=option.get("notes", ""),
+                    active=True,
+                )
+                db.add(model)
+            else:
+                model.display_name = model.display_name or option["label"]
+                model.notes = model.notes or option.get("notes", "")
+                model.updated_at = datetime.now(timezone.utc)
+
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        print(f"⚠️ LLM catalog seed hatası: {exc}")
     finally:
         db.close()
 

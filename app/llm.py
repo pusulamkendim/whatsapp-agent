@@ -70,6 +70,10 @@ def parse_model_ref(model_ref: str | None) -> tuple[str, str]:
         prefix = f"{provider}:"
         if value.startswith(prefix):
             return provider, value[len(prefix):]
+    if ":" in value:
+        provider, model = value.split(":", 1)
+        if provider and model:
+            return provider, model
     return "gemini", value
 
 
@@ -203,31 +207,56 @@ def _schema_to_gemini(schema: dict) -> types.Schema:
 
 
 def _openai_compatible_config(provider: str) -> tuple[str, str, dict]:
+    db_config = _provider_config_from_db(provider)
     if provider == "deepseek":
+        base_url, api_key_env = db_config or ("https://api.deepseek.com", "DEEPSEEK_API_KEY")
         return (
-            os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-            os.getenv("DEEPSEEK_API_KEY", ""),
+            os.getenv("DEEPSEEK_BASE_URL", base_url),
+            os.getenv(api_key_env, ""),
             {},
         )
     if provider == "openrouter":
+        base_url, api_key_env = db_config or ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY")
         return (
-            os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-            os.getenv("OPENROUTER_API_KEY", ""),
+            os.getenv("OPENROUTER_BASE_URL", base_url),
+            os.getenv(api_key_env, ""),
             {
                 "HTTP-Referer": os.getenv("BASE_URL", "https://agentapi.pusulamkendim.com"),
                 "X-OpenRouter-Title": "AgentLense",
             },
         )
     if provider == "ollama":
+        base_url, api_key_env = db_config or ("http://localhost:11434/v1", "OLLAMA_API_KEY")
         return (
-            os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-            os.getenv("OLLAMA_API_KEY", "ollama"),
+            os.getenv("OLLAMA_BASE_URL", base_url),
+            os.getenv(api_key_env, "ollama"),
             {},
         )
     if provider == "openai":
+        base_url, api_key_env = db_config or ("https://api.openai.com/v1", "OPENAI_API_KEY")
         return (
-            os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-            os.getenv("OPENAI_API_KEY", ""),
+            os.getenv("OPENAI_BASE_URL", base_url),
+            os.getenv(api_key_env, ""),
             {},
         )
+    if db_config:
+        base_url, api_key_env = db_config
+        return (base_url, os.getenv(api_key_env, ""), {})
     raise ValueError(f"Unsupported OpenAI-compatible provider: {provider}")
+
+
+def _provider_config_from_db(provider: str) -> tuple[str, str] | None:
+    try:
+        from app.database import SessionLocal
+        from app.models import LlmProvider
+
+        db = SessionLocal()
+        try:
+            row = db.query(LlmProvider).filter(LlmProvider.slug == provider, LlmProvider.active == True).first()
+            if row and row.base_url:
+                return row.base_url, row.api_key_env or ""
+        finally:
+            db.close()
+    except Exception:
+        return None
+    return None

@@ -17,7 +17,7 @@ from app.telegram import send_message as tg_send, extract_message as tg_extract,
 from app.instagram import send_message as ig_send, extract_message as ig_extract
 from app import retreat_agent
 from app.agent_registry import run_agent
-from app.llm import MODEL_OPTIONS, provider_label
+from app.llm import MODEL_OPTIONS, parse_model_ref, provider_label, run_openai_simple_chat
 from app.models import (
     Agent,
     AgentKnowledgeBase,
@@ -27,6 +27,9 @@ from app.models import (
     Handoff,
     KnowledgeBase,
     KnowledgeDocument,
+    LlmModel,
+    LlmProvider,
+    LlmUsageLog,
     Route,
 )
 from app.router import find_channel_account, resolve_route
@@ -621,6 +624,13 @@ def get_agents():
             "name": a.name,
             "active": a.active,
             "model": a.model,
+            "fallback_model": a.fallback_model or "",
+            "temperature": a.temperature if a.temperature is not None else 0.7,
+            "max_tokens": a.max_tokens,
+            "timeout_seconds": a.timeout_seconds or 60,
+            "daily_budget_limit": a.daily_budget_limit,
+            "monthly_budget_limit": a.monthly_budget_limit,
+            "failover_enabled": a.failover_enabled,
             "model_label": provider_label(a.model),
             "system_prompt": a.system_prompt or _default_prompt_preview(a.slug),
             "knowledge_base": a.knowledge_base or "",
@@ -644,6 +654,13 @@ async def create_agent(request: Request):
             name=data.get("name") or slug,
             type=data.get("type") or "generic_prompt",
             model=data.get("model") or "gemini:gemini-2.5-flash",
+            fallback_model=data.get("fallback_model", ""),
+            temperature=data.get("temperature", 0.7),
+            max_tokens=data.get("max_tokens"),
+            timeout_seconds=data.get("timeout_seconds", 60),
+            daily_budget_limit=data.get("daily_budget_limit"),
+            monthly_budget_limit=data.get("monthly_budget_limit"),
+            failover_enabled=data.get("failover_enabled", True),
             system_prompt=data.get("system_prompt", ""),
             knowledge_base=data.get("knowledge_base", ""),
             active=data.get("active", True),
@@ -671,6 +688,20 @@ async def update_agent_config(agent_type: str, request: Request):
             agent.name = data["name"]
         if "model" in data:
             agent.model = data["model"]
+        if "fallback_model" in data:
+            agent.fallback_model = data["fallback_model"] or ""
+        if "temperature" in data:
+            agent.temperature = data["temperature"]
+        if "max_tokens" in data:
+            agent.max_tokens = data["max_tokens"] or None
+        if "timeout_seconds" in data:
+            agent.timeout_seconds = data["timeout_seconds"] or 60
+        if "daily_budget_limit" in data:
+            agent.daily_budget_limit = data["daily_budget_limit"] or None
+        if "monthly_budget_limit" in data:
+            agent.monthly_budget_limit = data["monthly_budget_limit"] or None
+        if "failover_enabled" in data:
+            agent.failover_enabled = data["failover_enabled"]
         if "system_prompt" in data:
             agent.system_prompt = data["system_prompt"]
             if agent.slug == "retreat":
@@ -730,7 +761,227 @@ def _default_prompt_preview(agent_slug: str) -> str:
 
 @app.get("/api/llm/models")
 def get_llm_models():
-    return MODEL_OPTIONS
+    db = SessionLocal()
+    try:
+        models = db.query(LlmModel).join(LlmProvider).order_by(
+            LlmProvider.slug.asc(),
+            LlmModel.display_name.asc(),
+        ).all()
+        if not models:
+            return MODEL_OPTIONS
+        return [_llm_model_payload(model) for model in models if model.active and model.provider and model.provider.active]
+    finally:
+        db.close()
+
+
+@app.get("/api/llm/providers")
+def list_llm_providers():
+    db = SessionLocal()
+    try:
+        return [_llm_provider_payload(provider) for provider in db.query(LlmProvider).order_by(LlmProvider.slug.asc()).all()]
+    finally:
+        db.close()
+
+
+@app.post("/api/llm/providers")
+async def create_llm_provider(request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        slug = _slugify(data.get("slug") or data.get("name"))
+        if db.query(LlmProvider).filter(LlmProvider.slug == slug).first():
+            return JSONResponse({"error": "provider_exists"}, status_code=400)
+        provider = LlmProvider(
+            slug=slug,
+            name=data.get("name") or slug,
+            base_url=data.get("base_url", ""),
+            api_key_env=data.get("api_key_env", ""),
+            active=data.get("active", True),
+        )
+        db.add(provider)
+        db.commit()
+        db.refresh(provider)
+        return {"ok": True, "provider": _llm_provider_payload(provider)}
+    finally:
+        db.close()
+
+
+@app.put("/api/llm/providers/{provider_id}")
+async def update_llm_provider(provider_id: int, request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        provider = db.query(LlmProvider).filter(LlmProvider.id == provider_id).first()
+        if not provider:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        for field in ["name", "base_url", "api_key_env", "active"]:
+            if field in data:
+                setattr(provider, field, data[field])
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/llm/models")
+async def create_llm_model(request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        provider = db.query(LlmProvider).filter(LlmProvider.id == data.get("provider_id")).first()
+        if not provider:
+            return JSONResponse({"error": "provider_not_found"}, status_code=404)
+        model_ref = data.get("model_ref") or f"{provider.slug}:{data.get('slug', '').strip()}"
+        if db.query(LlmModel).filter(LlmModel.model_ref == model_ref).first():
+            return JSONResponse({"error": "model_exists"}, status_code=400)
+        model = LlmModel(provider_id=provider.id)
+        _apply_llm_model_payload(model, data, provider)
+        db.add(model)
+        db.commit()
+        db.refresh(model)
+        return {"ok": True, "model": _llm_model_payload(model)}
+    finally:
+        db.close()
+
+
+@app.put("/api/llm/models/{model_id}")
+async def update_llm_model(model_id: int, request: Request):
+    data = await request.json()
+    db = SessionLocal()
+    try:
+        model = db.query(LlmModel).filter(LlmModel.id == model_id).first()
+        if not model:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        provider = db.query(LlmProvider).filter(LlmProvider.id == data.get("provider_id", model.provider_id)).first()
+        if not provider:
+            return JSONResponse({"error": "provider_not_found"}, status_code=404)
+        _apply_llm_model_payload(model, data, provider)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.delete("/api/llm/models/{model_id}")
+def delete_llm_model(model_id: int):
+    db = SessionLocal()
+    try:
+        model = db.query(LlmModel).filter(LlmModel.id == model_id).first()
+        if not model:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        model.active = False
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/llm/models/test")
+async def test_llm_model(request: Request):
+    data = await request.json()
+    model_ref = data.get("model_ref") or "gemini:gemini-2.5-flash"
+    message = data.get("message") or "Reply with OK only."
+    try:
+        if parse_model_ref(model_ref)[0] == "gemini":
+            from google.genai import types
+            from app.llm import GEMINI_CLIENT
+
+            response = GEMINI_CLIENT.models.generate_content(
+                model=parse_model_ref(model_ref)[1],
+                contents=[types.Content(role="user", parts=[types.Part.from_text(text=message)])],
+            )
+            text = response.candidates[0].content.parts[0].text
+        else:
+            text = run_openai_simple_chat(model_ref, [{"role": "user", "content": message}], 0)
+        return {"ok": True, "model_ref": model_ref, "response": text}
+    except Exception as exc:
+        return JSONResponse({"ok": False, "model_ref": model_ref, "error": str(exc)[:800]}, status_code=400)
+
+
+@app.get("/api/llm/usage")
+def get_llm_usage(limit: int = Query(20, ge=1, le=100)):
+    db = SessionLocal()
+    try:
+        rows = db.query(LlmUsageLog).order_by(LlmUsageLog.created_at.desc()).limit(limit).all()
+        total = db.query(LlmUsageLog).count()
+        errors = db.query(LlmUsageLog).filter(LlmUsageLog.success == False).count()
+        return {
+            "summary": {
+                "total_calls": total,
+                "errors": errors,
+                "success_rate": round(((total - errors) / total) * 100, 1) if total else 0,
+            },
+            "logs": [{
+                "id": row.id,
+                "agent_id": row.agent_id,
+                "agent_slug": row.agent.slug if row.agent else "",
+                "provider": row.provider,
+                "model_ref": row.model_ref,
+                "latency_ms": row.latency_ms,
+                "success": row.success,
+                "error_code": row.error_code,
+                "error_message": row.error_message,
+                "created_at": row.created_at.isoformat() if row.created_at else "",
+            } for row in rows],
+        }
+    finally:
+        db.close()
+
+
+def _llm_provider_payload(provider: LlmProvider) -> dict:
+    return {
+        "id": provider.id,
+        "slug": provider.slug,
+        "name": provider.name,
+        "base_url": provider.base_url or "",
+        "api_key_env": provider.api_key_env or "",
+        "api_key_status": "set" if provider.api_key_env and os.getenv(provider.api_key_env) else "missing",
+        "active": provider.active,
+    }
+
+
+def _llm_model_payload(model: LlmModel) -> dict:
+    provider = model.provider
+    return {
+        "id": model.id,
+        "provider_id": model.provider_id,
+        "provider": provider.slug if provider else parse_model_ref(model.model_ref)[0],
+        "label": model.display_name,
+        "display_name": model.display_name,
+        "slug": model.slug,
+        "model": model.model_ref,
+        "model_ref": model.model_ref,
+        "env": provider.api_key_env if provider else "",
+        "supports_tools": model.supports_tools,
+        "supports_vision": model.supports_vision,
+        "context_window": model.context_window,
+        "input_price": model.input_price,
+        "output_price": model.output_price,
+        "rate_limit_rpm": model.rate_limit_rpm,
+        "rate_limit_tpm": model.rate_limit_tpm,
+        "active": model.active,
+        "is_default": model.is_default,
+        "notes": model.notes or "",
+    }
+
+
+def _apply_llm_model_payload(model: LlmModel, data: dict, provider: LlmProvider):
+    slug = (data.get("slug") or model.slug or "").strip()
+    model_ref = data.get("model_ref") or f"{provider.slug}:{slug}"
+    model.provider_id = provider.id
+    model.slug = slug or model_ref.split(":", 1)[-1]
+    model.display_name = data.get("display_name") or data.get("label") or model.slug
+    model.model_ref = model_ref
+    model.supports_tools = data.get("supports_tools", model.supports_tools or False)
+    model.supports_vision = data.get("supports_vision", model.supports_vision or False)
+    model.context_window = data.get("context_window") or None
+    model.input_price = data.get("input_price") or None
+    model.output_price = data.get("output_price") or None
+    model.rate_limit_rpm = data.get("rate_limit_rpm") or None
+    model.rate_limit_tpm = data.get("rate_limit_tpm") or None
+    model.active = data.get("active", model.active if model.active is not None else True)
+    model.is_default = data.get("is_default", model.is_default or False)
+    model.notes = data.get("notes", model.notes or "")
 
 
 def _mask_secret(value: str | None) -> str:
@@ -1274,6 +1525,11 @@ def handoffs_page(request: Request):
 @app.get("/dashboard/agents", response_class=HTMLResponse)
 def agents_page(request: Request):
     return templates.TemplateResponse(request, "agents.html", {"active": "agents"})
+
+
+@app.get("/dashboard/llm", response_class=HTMLResponse)
+def llm_page(request: Request):
+    return templates.TemplateResponse(request, "llm.html", {"active": "llm"})
 
 
 @app.get("/dashboard/channels", response_class=HTMLResponse)

@@ -29,6 +29,13 @@ class Agent(Base):
     name = Column(String, nullable=False)
     type = Column(String, nullable=False)  # generic_prompt, retreat, restaurant, custom_code
     model = Column(String, default="gemini-2.5-flash")
+    fallback_model = Column(String, default="")
+    temperature = Column(Float, default=0.7)
+    max_tokens = Column(Integer, nullable=True)
+    timeout_seconds = Column(Integer, default=60)
+    daily_budget_limit = Column(Float, nullable=True)
+    monthly_budget_limit = Column(Float, nullable=True)
+    failover_enabled = Column(Boolean, default=True)
     system_prompt = Column(Text, default="")
     knowledge_base = Column(Text, default="")
     active = Column(Boolean, default=True)
@@ -37,6 +44,65 @@ class Agent(Base):
 
     routes = relationship("Route", back_populates="agent")
     knowledge_links = relationship("AgentKnowledgeBase", back_populates="agent")
+
+
+class LlmProvider(Base):
+    __tablename__ = "llm_providers"
+
+    id = Column(Integer, primary_key=True)
+    slug = Column(String, nullable=False, unique=True, index=True)
+    name = Column(String, nullable=False)
+    base_url = Column(String, default="")
+    api_key_env = Column(String, default="")
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    models = relationship("LlmModel", back_populates="provider")
+
+
+class LlmModel(Base):
+    __tablename__ = "llm_models"
+
+    id = Column(Integer, primary_key=True)
+    provider_id = Column(Integer, ForeignKey("llm_providers.id"), nullable=False, index=True)
+    slug = Column(String, nullable=False, index=True)
+    display_name = Column(String, nullable=False)
+    model_ref = Column(String, nullable=False, unique=True, index=True)
+    supports_tools = Column(Boolean, default=False)
+    supports_vision = Column(Boolean, default=False)
+    context_window = Column(Integer, nullable=True)
+    input_price = Column(Float, nullable=True)
+    output_price = Column(Float, nullable=True)
+    rate_limit_rpm = Column(Integer, nullable=True)
+    rate_limit_tpm = Column(Integer, nullable=True)
+    active = Column(Boolean, default=True)
+    is_default = Column(Boolean, default=False)
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    provider = relationship("LlmProvider", back_populates="models")
+
+
+class LlmUsageLog(Base):
+    __tablename__ = "llm_usage_logs"
+
+    id = Column(Integer, primary_key=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True, index=True)
+    provider = Column(String, default="", index=True)
+    model_ref = Column(String, default="", index=True)
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    estimated_cost = Column(Float, nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+    success = Column(Boolean, default=True, index=True)
+    error_code = Column(String, default="")
+    error_message = Column(Text, default="")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    agent = relationship("Agent")
 
 
 class Route(Base):

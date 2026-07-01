@@ -1,5 +1,8 @@
+from datetime import datetime, timedelta, timezone
+import time
+
 from sqlalchemy.orm import Session
-from app.models import Agent, AgentKnowledgeBase, KnowledgeDocument
+from app.models import Agent, AgentKnowledgeBase, KnowledgeDocument, LlmModel, LlmUsageLog
 from app.agent import chat as restaurant_chat
 from app.retreat_agent import chat as retreat_chat
 from app.llm import is_gemini_model, parse_model_ref, run_openai_simple_chat, GEMINI_CLIENT
@@ -11,18 +14,88 @@ RESTAURANT_NAME = "Lezzet Durağı"
 
 
 def run_agent(agent: Agent, customer_id: str, message: str, db: Session) -> str:
+    primary_model = agent.model or "gemini:gemini-2.5-flash"
+    fallback_model = agent.fallback_model or ""
+    try:
+        return _run_agent_with_model(agent, customer_id, message, db, primary_model)
+    except Exception as exc:
+        _log_llm_usage(db, agent, primary_model, success=False, error=exc)
+        if agent.failover_enabled and fallback_model and fallback_model != primary_model:
+            try:
+                return _run_agent_with_model(agent, customer_id, message, db, fallback_model)
+            except Exception as fallback_exc:
+                _log_llm_usage(db, agent, fallback_model, success=False, error=fallback_exc)
+                raise fallback_exc
+        raise exc
+
+
+def _run_agent_with_model(agent: Agent, customer_id: str, message: str, db: Session, model: str) -> str:
+    rate_error = _rate_limit_error(db, model)
+    if rate_error:
+        raise RuntimeError(rate_error)
+
+    started = time.perf_counter()
     if agent.type == "restaurant" or agent.slug == "restaurant":
-        return restaurant_chat(customer_id, message, RESTAURANT_ID, RESTAURANT_NAME, db, model=agent.model)
+        response = restaurant_chat(customer_id, message, RESTAURANT_ID, RESTAURANT_NAME, db, model=model)
+        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started))
+        return response
 
     if agent.type == "retreat" or agent.slug == "retreat":
         knowledge = build_agent_knowledge(agent, db)
-        return retreat_chat(customer_id, message, knowledge_base=knowledge or None, model=agent.model)
+        response = retreat_chat(customer_id, message, knowledge_base=knowledge or None, model=model)
+        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started))
+        return response
 
     if agent.type == "generic_prompt":
         knowledge = build_agent_knowledge(agent, db)
-        return _generic_prompt_response(agent, customer_id, message, knowledge)
+        response = _generic_prompt_response(agent, customer_id, message, knowledge, model)
+        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started))
+        return response
 
     return "Bu agent tipi henüz desteklenmiyor."
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
+
+
+def _log_llm_usage(
+    db: Session,
+    agent: Agent,
+    model_ref: str,
+    success: bool,
+    latency_ms: int | None = None,
+    error: Exception | None = None,
+):
+    provider = parse_model_ref(model_ref)[0]
+    try:
+        db.add(LlmUsageLog(
+            agent_id=agent.id,
+            provider=provider,
+            model_ref=model_ref,
+            latency_ms=latency_ms,
+            success=success,
+            error_code=type(error).__name__ if error else "",
+            error_message=str(error)[:1000] if error else "",
+        ))
+        db.commit()
+    except Exception as log_exc:
+        db.rollback()
+        print(f"⚠️ LLM usage log hatası: {log_exc}")
+
+
+def _rate_limit_error(db: Session, model_ref: str) -> str | None:
+    model = db.query(LlmModel).filter(LlmModel.model_ref == model_ref, LlmModel.active == True).first()
+    if not model or not model.rate_limit_rpm:
+        return None
+    since = datetime.now(timezone.utc) - timedelta(minutes=1)
+    calls = db.query(LlmUsageLog).filter(
+        LlmUsageLog.model_ref == model_ref,
+        LlmUsageLog.created_at >= since,
+    ).count()
+    if calls >= model.rate_limit_rpm:
+        return f"rate_limit_rpm_exceeded:{model_ref}"
+    return None
 
 
 def build_agent_knowledge(agent: Agent, db: Session) -> str:
@@ -59,19 +132,19 @@ generic_conversations: dict[str, list[dict]] = {}
 generic_gemini_conversations: dict[str, list] = {}
 
 
-def _generic_prompt_response(agent: Agent, customer_id: str, message: str, knowledge: str) -> str:
+def _generic_prompt_response(agent: Agent, customer_id: str, message: str, knowledge: str, model: str) -> str:
     prompt = agent.system_prompt or f"Sen {agent.name} isimli yardımcı bir asistansın."
     if knowledge:
         prompt = f"{prompt}\n\nBILGI BANKASI:\n{knowledge}"
 
     conversation_key = f"{agent.id}:{customer_id}"
-    if is_gemini_model(agent.model):
+    if is_gemini_model(model):
         if conversation_key not in generic_gemini_conversations:
             generic_gemini_conversations[conversation_key] = []
         history = generic_gemini_conversations[conversation_key]
         history.append(types.Content(role="user", parts=[types.Part.from_text(text=message)]))
         response = GEMINI_CLIENT.models.generate_content(
-            model=parse_model_ref(agent.model)[1],
+            model=parse_model_ref(model)[1],
             contents=history,
             config=types.GenerateContentConfig(system_instruction=prompt, temperature=0.7),
         )
@@ -85,7 +158,7 @@ def _generic_prompt_response(agent: Agent, customer_id: str, message: str, knowl
         generic_conversations[conversation_key] = [{"role": "system", "content": prompt}]
     history = generic_conversations[conversation_key]
     history.append({"role": "user", "content": message})
-    text = run_openai_simple_chat(agent.model, history)
+    text = run_openai_simple_chat(model, history)
     if len(history) > 32:
         generic_conversations[conversation_key] = [history[0], *history[-31:]]
     return text

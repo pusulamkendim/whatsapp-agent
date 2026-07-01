@@ -41,6 +41,30 @@
                 <span class="text-sm font-medium">Model</span>
                 <select id="agentModel" class="w-full border rounded-md px-3 py-2"></select>
             </label>
+            <label class="space-y-1 md:col-span-2">
+                <span class="text-sm font-medium">Fallback model</span>
+                <select id="agentFallbackModel" class="w-full border rounded-md px-3 py-2"></select>
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Temperature</span>
+                <input id="agentTemperature" type="number" min="0" max="2" step="0.1" class="w-full border rounded-md px-3 py-2">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Timeout sn</span>
+                <input id="agentTimeout" type="number" min="5" step="1" class="w-full border rounded-md px-3 py-2">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Gunluk butce</span>
+                <input id="agentDailyBudget" type="number" min="0" step="0.01" class="w-full border rounded-md px-3 py-2">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Aylik butce</span>
+                <input id="agentMonthlyBudget" type="number" min="0" step="0.01" class="w-full border rounded-md px-3 py-2">
+            </label>
+            <label class="flex items-center gap-2">
+                <input id="agentFailover" type="checkbox" class="rounded">
+                <span class="text-sm font-medium">Fallback kullan</span>
+            </label>
             <label class="flex items-center gap-2 md:col-span-4">
                 <input id="agentActive" type="checkbox" class="rounded">
                 <span class="text-sm font-medium">Aktif</span>
@@ -84,6 +108,7 @@ async function loadAgents() {
                 <div>
                     <h3 class="text-base font-semibold">${agent.name}</h3>
                     <p class="text-sm text-slate-500">${agent.slug} · ${agent.type} · ${agent.model_label || agent.model}</p>
+                    ${agent.fallback_model ? `<p class="text-xs text-slate-400 mt-1">Fallback: ${agent.fallback_model}</p>` : ''}
                 </div>
                 ${statusBadge(agent.active)}
             </div>
@@ -117,6 +142,7 @@ function escapeHtml(value) {
 function openAgentForm(id = null) {
     const agent = agents.find(item => item.id === id);
     renderModelOptions(agent?.model || 'gemini:gemini-2.5-flash');
+    renderFallbackModelOptions(agent?.fallback_model || '');
     agentFormTitle.textContent = agent ? 'Agent duzenle' : 'Yeni agent';
     agentId.value = agent?.id || '';
     agentSlug.value = agent?.slug || '';
@@ -124,6 +150,12 @@ function openAgentForm(id = null) {
     agentName.value = agent?.name || '';
     agentType.value = agent?.type || 'generic_prompt';
     agentModel.value = normalizeModelValue(agent?.model || 'gemini:gemini-2.5-flash');
+    agentFallbackModel.value = agent?.fallback_model || '';
+    agentTemperature.value = agent?.temperature ?? 0.7;
+    agentTimeout.value = agent?.timeout_seconds || 60;
+    agentDailyBudget.value = agent?.daily_budget_limit ?? '';
+    agentMonthlyBudget.value = agent?.monthly_budget_limit ?? '';
+    agentFailover.checked = agent ? Boolean(agent.failover_enabled) : true;
     agentActive.checked = agent ? agent.active : true;
     agentPrompt.value = agent?.system_prompt || '';
     agentKnowledge.value = agent?.knowledge_base || '';
@@ -131,22 +163,30 @@ function openAgentForm(id = null) {
     agentDialog.showModal();
 }
 
+function renderFallbackModelOptions(selectedModel) {
+    renderModelOptionsForSelect(agentFallbackModel, selectedModel, true);
+}
+
 function renderModelOptions(selectedModel) {
+    renderModelOptionsForSelect(agentModel, selectedModel, false);
+}
+
+function renderModelOptionsForSelect(selectEl, selectedModel, includeEmpty) {
     const selected = normalizeModelValue(selectedModel);
     const grouped = modelOptions.reduce((acc, option) => {
         if (!acc[option.provider]) acc[option.provider] = [];
         acc[option.provider].push(option);
         return acc;
     }, {});
-    agentModel.innerHTML = Object.entries(grouped).map(([provider, options]) => `
+    selectEl.innerHTML = `${includeEmpty ? '<option value="" data-meta="Fallback kapali">Yok</option>' : ''}` + Object.entries(grouped).map(([provider, options]) => `
         <optgroup label="${provider}">
             ${options.map(option => `<option value="${option.model}" data-meta="${option.env || ''}">${option.label}</option>`).join('')}
         </optgroup>
     `).join('');
-    if (!Array.from(agentModel.options).some(option => option.value === selected)) {
-        agentModel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(selected)}">${escapeHtml(selected)}</option>`);
+    if (selectedModel && !Array.from(selectEl.options).some(option => option.value === selected)) {
+        selectEl.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(selected)}">${escapeHtml(selected)}</option>`);
     }
-    agentModel.value = selected;
+    selectEl.value = selectedModel ? selected : '';
 }
 
 function normalizeModelValue(value) {
@@ -162,6 +202,12 @@ agentForm.addEventListener('submit', async (event) => {
         name: agentName.value,
         type: agentType.value,
         model: agentModel.value,
+        fallback_model: agentFallbackModel.value,
+        temperature: Number(agentTemperature.value || 0.7),
+        timeout_seconds: Number(agentTimeout.value || 60),
+        daily_budget_limit: agentDailyBudget.value === '' ? null : Number(agentDailyBudget.value),
+        monthly_budget_limit: agentMonthlyBudget.value === '' ? null : Number(agentMonthlyBudget.value),
+        failover_enabled: agentFailover.checked,
         active: agentActive.checked,
         system_prompt: agentPrompt.value,
         knowledge_base: agentKnowledge.value

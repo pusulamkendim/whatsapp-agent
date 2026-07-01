@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% block title %}LLM Models{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h2 class="text-xl font-semibold text-slate-900">LLM Models</h2>
+        <p class="text-slate-500 mt-1">Provider, model, fallback ve kullanim limitlerini yonet.</p>
+    </div>
+    <button onclick="openModelDialog()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni model</button>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-6">
+    <section class="panel p-5">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="font-semibold">Providers</h3>
+            <button onclick="openProviderDialog()" class="icon-btn" title="Provider ekle" aria-label="Provider ekle"><i data-lucide="plus"></i></button>
+        </div>
+        <div id="providerList" class="space-y-2"></div>
+    </section>
+
+    <section class="panel p-5">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="font-semibold">Model katalogu</h3>
+            <button onclick="loadAll()" class="btn-secondary btn-icon px-3 py-2"><i data-lucide="refresh-cw"></i>Yenile</button>
+        </div>
+        <div id="modelList" class="space-y-2"></div>
+    </section>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-6">
+    <section class="panel p-5">
+        <h3 class="font-semibold mb-4">Model testi</h3>
+        <div class="grid grid-cols-1 gap-3">
+            <select id="testModel"></select>
+            <textarea id="testMessage" rows="3" class="w-full border px-3 py-2" placeholder="Reply with OK only."></textarea>
+            <button onclick="testSelectedModel()" class="btn-primary btn-icon justify-center px-4 py-2"><i data-lucide="send"></i>Test et</button>
+            <pre id="testResult" class="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs min-h-24 overflow-auto"></pre>
+        </div>
+    </section>
+
+    <section class="panel p-5">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="font-semibold">Son LLM kullanimi</h3>
+            <span id="usageSummary" class="text-sm text-slate-500"></span>
+        </div>
+        <div id="usageList" class="space-y-2"></div>
+    </section>
+</div>
+
+<dialog id="providerDialog" class="rounded-lg w-full max-w-xl p-0 backdrop:bg-slate-950/50">
+    <form id="providerForm" class="bg-white p-6 space-y-4">
+        <div class="flex items-start justify-between">
+            <h3 class="text-base font-semibold">Provider</h3>
+            <button type="button" onclick="providerDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
+        </div>
+        <input id="providerId" type="hidden">
+        <label class="block space-y-1">
+            <span class="text-sm font-medium">Slug</span>
+            <input id="providerSlug" class="w-full border px-3 py-2" placeholder="openrouter">
+        </label>
+        <label class="block space-y-1">
+            <span class="text-sm font-medium">Ad</span>
+            <input id="providerName" class="w-full border px-3 py-2" placeholder="OpenRouter">
+        </label>
+        <label class="block space-y-1">
+            <span class="text-sm font-medium">Base URL</span>
+            <input id="providerBaseUrl" class="w-full border px-3 py-2" placeholder="https://openrouter.ai/api/v1">
+        </label>
+        <label class="block space-y-1">
+            <span class="text-sm font-medium">API key env</span>
+            <input id="providerApiKeyEnv" class="w-full border px-3 py-2" placeholder="OPENROUTER_API_KEY">
+        </label>
+        <label class="flex items-center gap-2">
+            <input id="providerActive" type="checkbox" class="rounded">
+            <span class="text-sm font-medium">Aktif</span>
+        </label>
+        <div class="flex justify-end gap-2 pt-2">
+            <button type="button" onclick="providerDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
+            <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Kaydet</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog id="modelDialog" class="rounded-lg w-full max-w-3xl p-0 backdrop:bg-slate-950/50">
+    <form id="modelForm" class="bg-white p-6 space-y-4">
+        <div class="flex items-start justify-between">
+            <h3 class="text-base font-semibold">Model</h3>
+            <button type="button" onclick="modelDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
+        </div>
+        <input id="modelId" type="hidden">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Provider</span>
+                <select id="modelProvider"></select>
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Display name</span>
+                <input id="modelDisplayName" class="w-full border px-3 py-2" placeholder="GPT OSS 20B Free">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Slug</span>
+                <input id="modelSlug" class="w-full border px-3 py-2" placeholder="openai/gpt-oss-20b:free">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Model ref</span>
+                <input id="modelRef" class="w-full border px-3 py-2" placeholder="openrouter:openai/gpt-oss-20b:free">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">RPM limit</span>
+                <input id="modelRpm" type="number" min="0" class="w-full border px-3 py-2">
+            </label>
+            <label class="space-y-1">
+                <span class="text-sm font-medium">Context window</span>
+                <input id="modelContext" type="number" min="0" class="w-full border px-3 py-2">
+            </label>
+            <label class="flex items-center gap-2">
+                <input id="modelTools" type="checkbox" class="rounded">
+                <span class="text-sm font-medium">Tool support</span>
+            </label>
+            <label class="flex items-center gap-2">
+                <input id="modelActive" type="checkbox" class="rounded">
+                <span class="text-sm font-medium">Aktif</span>
+            </label>
+            <label class="space-y-1 md:col-span-2">
+                <span class="text-sm font-medium">Not</span>
+                <textarea id="modelNotes" rows="3" class="w-full border px-3 py-2"></textarea>
+            </label>
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+            <button type="button" onclick="modelDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
+            <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Kaydet</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let providers = [];
+let models = [];
+let usage = {};
+
+async function api(path, options = {}) {
+    const res = await fetch(path, options);
+    if (res.status === 401) location.href = '/login';
+    return res;
+}
+
+async function loadAll() {
+    const [providerRes, modelRes, usageRes] = await Promise.all([
+        api('/api/llm/providers'),
+        api('/api/llm/models'),
+        api('/api/llm/usage?limit=12')
+    ]);
+    providers = await providerRes.json();
+    models = await modelRes.json();
+    usage = await usageRes.json();
+    renderProviders();
+    renderModels();
+    renderUsage();
+    renderTestModels();
+    if (window.enhanceSelects) window.enhanceSelects(document);
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function renderProviders() {
+    providerList.innerHTML = providers.map(provider => `
+        <button onclick="openProviderDialog(${provider.id})" class="w-full text-left border border-slate-200 rounded-lg px-4 py-3 hover:bg-slate-50">
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <div class="font-semibold">${escapeHtml(provider.name)}</div>
+                    <div class="text-xs text-slate-500">${escapeHtml(provider.slug)} · ${escapeHtml(provider.api_key_env || 'env yok')}</div>
+                </div>
+                <span class="text-xs px-2 py-1 rounded ${provider.api_key_status === 'set' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}">${provider.api_key_status}</span>
+            </div>
+        </button>
+    `).join('');
+}
+
+function renderModels() {
+    modelList.innerHTML = models.map(model => `
+        <div class="border border-slate-200 rounded-lg px-4 py-3">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <div class="font-semibold">${escapeHtml(model.display_name)}</div>
+                    <div class="text-xs text-slate-500 font-mono">${escapeHtml(model.model_ref)}</div>
+                    <div class="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                        <span class="px-2 py-1 rounded bg-slate-100">${escapeHtml(model.provider)}</span>
+                        ${model.supports_tools ? '<span class="px-2 py-1 rounded bg-emerald-50 text-emerald-700">tools</span>' : ''}
+                        ${model.rate_limit_rpm ? `<span class="px-2 py-1 rounded bg-amber-50 text-amber-700">${model.rate_limit_rpm} rpm</span>` : ''}
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="runModelTest('${escapeAttr(model.model_ref)}')" class="icon-btn" title="Test" aria-label="Test"><i data-lucide="send"></i></button>
+                    <button onclick="openModelDialog(${model.id})" class="icon-btn" title="Duzenle" aria-label="Duzenle"><i data-lucide="pencil"></i></button>
+                    <button onclick="deleteModel(${model.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderUsage() {
+    usageSummary.textContent = `${usage.summary?.total_calls || 0} cagri · %${usage.summary?.success_rate || 0} basari`;
+    usageList.innerHTML = (usage.logs || []).map(log => `
+        <div class="border border-slate-200 rounded-lg px-4 py-3">
+            <div class="flex items-start justify-between gap-3">
+                <div>
+                    <div class="font-medium">${escapeHtml(log.agent_slug || 'agent yok')}</div>
+                    <div class="text-xs text-slate-500 font-mono">${escapeHtml(log.model_ref)}</div>
+                    ${log.error_message ? `<div class="mt-1 text-xs text-rose-700">${escapeHtml(log.error_message).slice(0, 180)}</div>` : ''}
+                </div>
+                <span class="text-xs px-2 py-1 rounded ${log.success ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}">${log.success ? 'ok' : 'hata'}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+function renderTestModels() {
+    testModel.innerHTML = models.map(model => `<option value="${escapeAttr(model.model_ref)}" data-meta="${escapeAttr(model.provider)}">${escapeHtml(model.display_name)}</option>`).join('');
+    modelProvider.innerHTML = providers.map(provider => `<option value="${provider.id}" data-meta="${escapeAttr(provider.slug)}">${escapeHtml(provider.name)}</option>`).join('');
+}
+
+function openProviderDialog(id = null) {
+    const provider = providers.find(item => item.id === id);
+    providerId.value = provider?.id || '';
+    providerSlug.value = provider?.slug || '';
+    providerSlug.disabled = Boolean(provider);
+    providerName.value = provider?.name || '';
+    providerBaseUrl.value = provider?.base_url || '';
+    providerApiKeyEnv.value = provider?.api_key_env || '';
+    providerActive.checked = provider ? provider.active : true;
+    providerDialog.showModal();
+}
+
+providerForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const id = providerId.value;
+    await api(id ? `/api/llm/providers/${id}` : '/api/llm/providers', {
+        method: id ? 'PUT' : 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            slug: providerSlug.value,
+            name: providerName.value,
+            base_url: providerBaseUrl.value,
+            api_key_env: providerApiKeyEnv.value,
+            active: providerActive.checked
+        })
+    });
+    providerDialog.close();
+    loadAll();
+});
+
+function openModelDialog(id = null) {
+    const model = models.find(item => item.id === id);
+    renderTestModels();
+    modelId.value = model?.id || '';
+    modelProvider.value = model?.provider_id || providers[0]?.id || '';
+    modelDisplayName.value = model?.display_name || '';
+    modelSlug.value = model?.slug || '';
+    modelRef.value = model?.model_ref || '';
+    modelRpm.value = model?.rate_limit_rpm || '';
+    modelContext.value = model?.context_window || '';
+    modelTools.checked = model ? model.supports_tools : true;
+    modelActive.checked = model ? model.active : true;
+    modelNotes.value = model?.notes || '';
+    if (window.enhanceSelects) window.enhanceSelects(modelDialog);
+    modelDialog.showModal();
+}
+
+modelForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const id = modelId.value;
+    await api(id ? `/api/llm/models/${id}` : '/api/llm/models', {
+        method: id ? 'PUT' : 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            provider_id: Number(modelProvider.value),
+            display_name: modelDisplayName.value,
+            slug: modelSlug.value,
+            model_ref: modelRef.value,
+            supports_tools: modelTools.checked,
+            context_window: numberOrNull(modelContext.value),
+            rate_limit_rpm: numberOrNull(modelRpm.value),
+            active: modelActive.checked,
+            notes: modelNotes.value
+        })
+    });
+    modelDialog.close();
+    loadAll();
+});
+
+async function deleteModel(id) {
+    if (!confirm('Model pasife alinsin mi?')) return;
+    await api(`/api/llm/models/${id}`, {method: 'DELETE'});
+    loadAll();
+}
+
+async function testSelectedModel() {
+    await runModelTest(testModel.value);
+}
+
+async function runModelTest(modelRef) {
+    testResult.textContent = 'Test ediliyor...';
+    const res = await api('/api/llm/models/test', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({model_ref: modelRef, message: testMessage.value || 'Reply with OK only.'})
+    });
+    testResult.textContent = JSON.stringify(await res.json(), null, 2);
+    loadAll();
+}
+
+function numberOrNull(value) {
+    return value === '' ? null : Number(value);
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+
+function escapeAttr(value) {
+    return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+loadAll();
+</script>
+{% endblock %}

@@ -901,6 +901,7 @@ async def create_route(request: Request):
         db.add(route)
         db.commit()
         db.refresh(route)
+        _clear_route_cache(route.channel_account_id)
         return {"ok": True, "id": route.id}
     finally:
         db.close()
@@ -918,6 +919,7 @@ async def update_route(route_id: int, request: Request):
             if field in data:
                 setattr(route, field, data[field])
         db.commit()
+        _clear_route_cache(route.channel_account_id)
         return {"ok": True}
     finally:
         db.close()
@@ -932,9 +934,20 @@ def delete_route(route_id: int):
             return JSONResponse({"error": "not_found"}, status_code=404)
         route.active = False
         db.commit()
+        _clear_route_cache(route.channel_account_id)
         return {"ok": True}
     finally:
         db.close()
+
+
+def _clear_route_cache(channel_account_id: int | None = None):
+    if channel_account_id is None:
+        customer_agents.clear()
+        return
+    prefix = f"{channel_account_id}:"
+    for key in list(customer_agents.keys()):
+        if key.startswith(prefix):
+            customer_agents.pop(key, None)
 
 
 @app.post("/api/routes/simulate")

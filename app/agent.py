@@ -8,6 +8,7 @@ from app.llm import (
     gemini_tool_from_openai_tools,
     is_gemini_model,
     parse_model_ref,
+    record_gemini_usage,
     run_openai_tool_loop,
 )
 
@@ -163,6 +164,7 @@ def chat(
             temperature=0.7,
         ),
     )
+    record_gemini_usage(model, response)
 
     # Tool call loop — Gemini tool çağırabilir, sonucu geri gönderip tekrar cevap alırız
     max_iterations = 5
@@ -212,6 +214,7 @@ def chat(
                 temperature=0.7,
             ),
         )
+        record_gemini_usage(model, response)
 
     # Son cevabı geçmişe ekle
     final_text = response.candidates[0].content.parts[0].text

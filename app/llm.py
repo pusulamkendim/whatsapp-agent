@@ -1,5 +1,7 @@
 import json
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Callable
 
 import requests
@@ -10,6 +12,7 @@ from app.config import GEMINI_API_KEY
 
 
 GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
+_USAGE_EVENTS: ContextVar[list[dict] | None] = ContextVar("llm_usage_events", default=None)
 
 MODEL_OPTIONS = [
     {
@@ -86,6 +89,58 @@ def is_gemini_model(model_ref: str | None) -> bool:
     return parse_model_ref(model_ref)[0] == "gemini"
 
 
+@contextmanager
+def capture_llm_usage():
+    events: list[dict] = []
+    token = _USAGE_EVENTS.set(events)
+    try:
+        yield events
+    finally:
+        _USAGE_EVENTS.reset(token)
+
+
+def summarize_llm_usage(events: list[dict]) -> dict:
+    return {
+        "prompt_tokens": _sum_usage(events, "prompt_tokens"),
+        "completion_tokens": _sum_usage(events, "completion_tokens"),
+        "total_tokens": _sum_usage(events, "total_tokens"),
+    }
+
+
+def record_gemini_usage(model_ref: str, response):
+    usage = getattr(response, "usage_metadata", None)
+    if not usage:
+        return
+    record_llm_usage(
+        model_ref=model_ref,
+        prompt_tokens=getattr(usage, "prompt_token_count", None),
+        completion_tokens=getattr(usage, "candidates_token_count", None),
+        total_tokens=getattr(usage, "total_token_count", None),
+    )
+
+
+def record_llm_usage(
+    model_ref: str,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    total_tokens: int | None = None,
+):
+    events = _USAGE_EVENTS.get()
+    if events is None:
+        return
+    events.append({
+        "model_ref": model_ref,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    })
+
+
+def _sum_usage(events: list[dict], key: str) -> int | None:
+    values = [event.get(key) for event in events if event.get(key) is not None]
+    return sum(values) if values else None
+
+
 def openai_compatible_chat(
     model_ref: str,
     messages: list[dict],
@@ -118,6 +173,13 @@ def openai_compatible_chat(
         detail = response.text[:500] if response.text else response.reason
         raise RuntimeError(f"{provider}:{model} HTTP {response.status_code}: {detail}")
     data = response.json()
+    usage = data.get("usage") or {}
+    record_llm_usage(
+        model_ref=model_ref,
+        prompt_tokens=usage.get("prompt_tokens"),
+        completion_tokens=usage.get("completion_tokens"),
+        total_tokens=usage.get("total_tokens"),
+    )
     return data["choices"][0]["message"]
 
 

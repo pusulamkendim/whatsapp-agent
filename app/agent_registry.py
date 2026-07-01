@@ -5,7 +5,15 @@ from sqlalchemy.orm import Session
 from app.models import Agent, AgentKnowledgeBase, KnowledgeDocument, LlmModel, LlmUsageLog
 from app.agent import chat as restaurant_chat
 from app.retreat_agent import chat as retreat_chat
-from app.llm import is_gemini_model, parse_model_ref, run_openai_simple_chat, GEMINI_CLIENT
+from app.llm import (
+    GEMINI_CLIENT,
+    capture_llm_usage,
+    is_gemini_model,
+    parse_model_ref,
+    record_gemini_usage,
+    run_openai_simple_chat,
+    summarize_llm_usage,
+)
 from google.genai import types
 
 
@@ -35,21 +43,34 @@ def _run_agent_with_model(agent: Agent, customer_id: str, message: str, db: Sess
         raise RuntimeError(rate_error)
 
     started = time.perf_counter()
+    with capture_llm_usage() as usage_events:
+        return _run_agent_with_usage(agent, customer_id, message, db, model, started, usage_events)
+
+
+def _run_agent_with_usage(
+    agent: Agent,
+    customer_id: str,
+    message: str,
+    db: Session,
+    model: str,
+    started: float,
+    usage_events: list[dict],
+) -> str:
     if agent.type == "restaurant" or agent.slug == "restaurant":
         response = restaurant_chat(customer_id, message, RESTAURANT_ID, RESTAURANT_NAME, db, model=model)
-        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started))
+        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started), usage=summarize_llm_usage(usage_events))
         return response
 
     if agent.type == "retreat" or agent.slug == "retreat":
         knowledge = build_agent_knowledge(agent, db)
         response = retreat_chat(customer_id, message, knowledge_base=knowledge or None, model=model)
-        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started))
+        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started), usage=summarize_llm_usage(usage_events))
         return response
 
     if agent.type == "generic_prompt":
         knowledge = build_agent_knowledge(agent, db)
         response = _generic_prompt_response(agent, customer_id, message, knowledge, model)
-        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started))
+        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started), usage=summarize_llm_usage(usage_events))
         return response
 
     return "Bu agent tipi henüz desteklenmiyor."
@@ -66,13 +87,18 @@ def _log_llm_usage(
     success: bool,
     latency_ms: int | None = None,
     error: Exception | None = None,
+    usage: dict | None = None,
 ):
     provider = parse_model_ref(model_ref)[0]
+    usage = usage or {}
     try:
         db.add(LlmUsageLog(
             agent_id=agent.id,
             provider=provider,
             model_ref=model_ref,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            total_tokens=usage.get("total_tokens"),
             latency_ms=latency_ms,
             success=success,
             error_code=type(error).__name__ if error else "",
@@ -148,6 +174,7 @@ def _generic_prompt_response(agent: Agent, customer_id: str, message: str, knowl
             contents=history,
             config=types.GenerateContentConfig(system_instruction=prompt, temperature=0.7),
         )
+        record_gemini_usage(model, response)
         text = response.candidates[0].content.parts[0].text
         history.append(response.candidates[0].content)
         if len(history) > 30:

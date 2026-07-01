@@ -17,7 +17,15 @@ from app.telegram import send_message as tg_send, extract_message as tg_extract,
 from app.instagram import send_message as ig_send, extract_message as ig_extract
 from app import retreat_agent
 from app.agent_registry import run_agent
-from app.llm import MODEL_OPTIONS, parse_model_ref, provider_label, run_openai_simple_chat
+from app.llm import (
+    MODEL_OPTIONS,
+    capture_llm_usage,
+    parse_model_ref,
+    provider_label,
+    record_gemini_usage,
+    run_openai_simple_chat,
+    summarize_llm_usage,
+)
 from app.models import (
     Agent,
     AgentKnowledgeBase,
@@ -882,18 +890,21 @@ async def test_llm_model(request: Request):
     model_ref = data.get("model_ref") or "gemini:gemini-2.5-flash"
     message = data.get("message") or "Reply with OK only."
     try:
-        if parse_model_ref(model_ref)[0] == "gemini":
-            from google.genai import types
-            from app.llm import GEMINI_CLIENT
+        with capture_llm_usage() as usage_events:
+            if parse_model_ref(model_ref)[0] == "gemini":
+                from google.genai import types
+                from app.llm import GEMINI_CLIENT
 
-            response = GEMINI_CLIENT.models.generate_content(
-                model=parse_model_ref(model_ref)[1],
-                contents=[types.Content(role="user", parts=[types.Part.from_text(text=message)])],
-            )
-            text = response.candidates[0].content.parts[0].text
-        else:
-            text = run_openai_simple_chat(model_ref, [{"role": "user", "content": message}], 0)
-        return {"ok": True, "model_ref": model_ref, "response": text}
+                response = GEMINI_CLIENT.models.generate_content(
+                    model=parse_model_ref(model_ref)[1],
+                    contents=[types.Content(role="user", parts=[types.Part.from_text(text=message)])],
+                )
+                record_gemini_usage(model_ref, response)
+                text = response.candidates[0].content.parts[0].text
+            else:
+                text = run_openai_simple_chat(model_ref, [{"role": "user", "content": message}], 0)
+            usage = summarize_llm_usage(usage_events)
+        return {"ok": True, "model_ref": model_ref, "response": text, "usage": usage}
     except Exception as exc:
         return JSONResponse({"ok": False, "model_ref": model_ref, "error": str(exc)[:800]}, status_code=400)
 
@@ -905,10 +916,13 @@ def get_llm_usage(limit: int = Query(20, ge=1, le=100)):
         rows = db.query(LlmUsageLog).order_by(LlmUsageLog.created_at.desc()).limit(limit).all()
         total = db.query(LlmUsageLog).count()
         errors = db.query(LlmUsageLog).filter(LlmUsageLog.success == False).count()
+        token_rows = db.query(LlmUsageLog.total_tokens).all()
+        total_tokens = sum(row.total_tokens or 0 for row in token_rows)
         return {
             "summary": {
                 "total_calls": total,
                 "errors": errors,
+                "total_tokens": total_tokens,
                 "success_rate": round(((total - errors) / total) * 100, 1) if total else 0,
             },
             "logs": [{
@@ -917,6 +931,10 @@ def get_llm_usage(limit: int = Query(20, ge=1, le=100)):
                 "agent_slug": row.agent.slug if row.agent else "",
                 "provider": row.provider,
                 "model_ref": row.model_ref,
+                "prompt_tokens": row.prompt_tokens,
+                "completion_tokens": row.completion_tokens,
+                "total_tokens": row.total_tokens,
+                "estimated_cost": row.estimated_cost,
                 "latency_ms": row.latency_ms,
                 "success": row.success,
                 "error_code": row.error_code,

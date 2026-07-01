@@ -105,7 +105,7 @@ function groupConversations(conversations) {
 function renderList(grouped) {
     groupedConversations = grouped;
     const entries = Object.entries(grouped);
-    conversationCount.textContent = `${entries.length} kayit`;
+    document.getElementById('conversation-count').textContent = `${entries.length} kayit`;
     const container = document.getElementById('conv-list');
 
     if (!entries.length) {
@@ -205,13 +205,13 @@ function showChat(phone) {
 
 function renderEmptyChat() {
     selectedPhone = null;
-    chatHeader.innerHTML = `
+    document.getElementById('chat-header').innerHTML = `
         <div class="flex items-center gap-3 text-slate-500">
             <i data-lucide="messages-square" class="w-5 h-5"></i>
             <p>Bir konusma secin</p>
         </div>
     `;
-    chatMessages.innerHTML = '';
+    document.getElementById('chat-messages').innerHTML = '';
     if (window.lucide) window.lucide.createIcons();
 }
 

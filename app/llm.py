@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Callable
@@ -163,11 +164,10 @@ def openai_compatible_chat(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    response = requests.post(
+    response = _post_with_transient_retry(
         f"{base_url.rstrip('/')}/chat/completions",
         headers=headers,
-        json=payload,
-        timeout=60,
+        payload=payload,
     )
     if not response.ok:
         detail = response.text[:500] if response.text else response.reason
@@ -181,6 +181,38 @@ def openai_compatible_chat(
         total_tokens=usage.get("total_tokens"),
     )
     return data["choices"][0]["message"]
+
+
+def _post_with_transient_retry(url: str, headers: dict, payload: dict) -> requests.Response:
+    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    if response.status_code not in {429, 502, 503, 504}:
+        return response
+
+    retry_after = _retry_after_seconds(response)
+    if retry_after is None or retry_after > 10:
+        return response
+
+    time.sleep(retry_after)
+    return requests.post(url, headers=headers, json=payload, timeout=60)
+
+
+def _retry_after_seconds(response: requests.Response) -> float | None:
+    header = response.headers.get("Retry-After")
+    if header:
+        try:
+            return max(0, float(header))
+        except ValueError:
+            return None
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    metadata = ((data.get("error") or {}).get("metadata") or {})
+    value = metadata.get("retry_after_seconds") or metadata.get("retry_after_seconds_raw")
+    try:
+        return max(0, float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def run_openai_tool_loop(

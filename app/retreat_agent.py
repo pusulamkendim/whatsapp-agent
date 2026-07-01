@@ -2,10 +2,17 @@ from google import genai
 from google.genai import types
 from app.config import GEMINI_API_KEY
 from app.whatsapp import send_message
+from app.llm import (
+    GEMINI_CLIENT,
+    gemini_tool_from_openai_tools,
+    is_gemini_model,
+    parse_model_ref,
+    run_openai_tool_loop,
+)
 import os
 import json
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = GEMINI_CLIENT
 
 # İnziva sahiplerinin WhatsApp numaraları (virgülle ayrılmış)
 OWNER_PHONES = [p.strip() for p in os.getenv("RETREAT_OWNER_PHONES", "905555574128").split(",")]
@@ -15,24 +22,26 @@ KB_PATH = os.path.join(os.path.dirname(__file__), "..", "retreat_docs", "knowled
 with open(KB_PATH, "r", encoding="utf-8") as f:
     KNOWLEDGE_BASE = f.read()
 
-# Tool tanımları
-tool_definitions = types.Tool(
-    function_declarations=[
-        types.FunctionDeclaration(
-            name="handoff_to_human",
-            description="Müşteriyi inziva ekibiyle görüştürmek için kullan. Müşteri kayıt olmak istediğinde, özel sorular sorduğunda, ödeme/taksit detayları istediğinde veya sağlık/psikolojik durum paylaştığında çağır. Adını mutlaka sor ve özet bilgi ile birlikte gönder.",
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "customer_name": types.Schema(type=types.Type.STRING, description="Müşterinin adı soyadı"),
-                    "conversation_summary": types.Schema(type=types.Type.STRING, description="Konuşmanın kısa özeti: ne sordu, neyle ilgilendi, özel durumu var mı"),
-                    "interest_level": types.Schema(type=types.Type.STRING, description="İlgi seviyesi: yüksek, orta, düşük"),
+tool_definitions_openai = [
+    {
+        "type": "function",
+        "function": {
+            "name": "handoff_to_human",
+            "description": "Müşteriyi inziva ekibiyle görüştürmek için kullan. Müşteri kayıt olmak istediğinde, özel sorular sorduğunda, ödeme/taksit detayları istediğinde veya sağlık/psikolojik durum paylaştığında çağır. Adını mutlaka sor ve özet bilgi ile birlikte gönder.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "customer_name": {"type": "string", "description": "Müşterinin adı soyadı"},
+                    "conversation_summary": {"type": "string", "description": "Konuşmanın kısa özeti: ne sordu, neyle ilgilendi, özel durumu var mı"},
+                    "interest_level": {"type": "string", "description": "İlgi seviyesi: yüksek, orta, düşük"},
                 },
-                required=["customer_name", "conversation_summary"],
-            ),
-        ),
-    ]
-)
+                "required": ["customer_name", "conversation_summary"],
+            },
+        },
+    },
+]
+
+tool_definitions = gemini_tool_from_openai_tools(tool_definitions_openai)
 
 def build_system_prompt(knowledge_base: str) -> str:
     return f"""Sen Samma Karuna'nın Koh Phangan Nefes ve Tantra İnzivası (23-30 Mayıs 2026) hakkında bilgi veren WhatsApp asistanısın.
@@ -79,6 +88,7 @@ SYSTEM_PROMPT = build_system_prompt(KNOWLEDGE_BASE)
 
 # Konuşma geçmişi
 conversations: dict[str, list] = {}
+openai_conversations: dict[str, list[dict]] = {}
 # Handoff yapılmış mı takibi
 handoffs: dict[str, bool] = {}
 
@@ -120,7 +130,13 @@ def execute_handoff(customer_phone: str, customer_name: str, summary: str, inter
     return "Bilgiler ekibe iletildi."
 
 
-def chat(customer_id: str, message: str, knowledge_base: str | None = None, system_prompt: str | None = None) -> str:
+def chat(
+    customer_id: str,
+    message: str,
+    knowledge_base: str | None = None,
+    system_prompt: str | None = None,
+    model: str = "gemini:gemini-2.5-flash",
+) -> str:
     """İnziva sorusunu yanıtla"""
     if system_prompt:
         prompt = system_prompt
@@ -128,6 +144,9 @@ def chat(customer_id: str, message: str, knowledge_base: str | None = None, syst
         prompt = build_system_prompt(knowledge_base)
     else:
         prompt = SYSTEM_PROMPT
+
+    if not is_gemini_model(model):
+        return _chat_openai_compatible(customer_id, message, prompt, model)
 
     if customer_id not in conversations:
         conversations[customer_id] = []
@@ -140,7 +159,7 @@ def chat(customer_id: str, message: str, knowledge_base: str | None = None, syst
     ))
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=parse_model_ref(model)[1],
         contents=history,
         config=types.GenerateContentConfig(
             system_instruction=prompt,
@@ -194,7 +213,7 @@ def chat(customer_id: str, message: str, knowledge_base: str | None = None, syst
         ))
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=parse_model_ref(model)[1],
             contents=history,
             config=types.GenerateContentConfig(
                 system_instruction=prompt,
@@ -208,5 +227,38 @@ def chat(customer_id: str, message: str, knowledge_base: str | None = None, syst
 
     if len(history) > 40:
         conversations[customer_id] = history[-40:]
+
+    return final_text
+
+
+def _chat_openai_compatible(customer_id: str, message: str, prompt: str, model: str) -> str:
+    if customer_id not in openai_conversations:
+        openai_conversations[customer_id] = [{"role": "system", "content": prompt}]
+
+    history = openai_conversations[customer_id]
+    history.append({"role": "user", "content": message})
+
+    def call_tool(tool_name: str, args: dict) -> str:
+        if tool_name != "handoff_to_human":
+            return "Bilinmeyen tool"
+        result = execute_handoff(
+            customer_phone=customer_id,
+            customer_name=args.get("customer_name", "Bilinmiyor"),
+            summary=args.get("conversation_summary", ""),
+            interest=args.get("interest_level", ""),
+        )
+        handoffs[customer_id] = True
+        return result
+
+    final_text = run_openai_tool_loop(
+        model,
+        history,
+        tool_definitions_openai,
+        call_tool,
+        max_iterations=3,
+    )
+
+    if len(history) > 42:
+        openai_conversations[customer_id] = [history[0], *history[-41:]]
 
     return final_text

@@ -86,7 +86,7 @@ def _seed_platform_defaults():
                 slug="retreat",
                 name="Inziva Agent",
                 type="retreat",
-                model="gemini-2.5-flash",
+                model="gemini:gemini-2.5-flash",
                 active=True,
             )
             db.add(retreat)
@@ -97,7 +97,7 @@ def _seed_platform_defaults():
                 slug="restaurant",
                 name="Restoran Agent",
                 type="restaurant",
-                model="gemini-2.5-flash",
+                model="gemini:gemini-2.5-flash",
                 active=True,
             )
             db.add(restaurant)

@@ -261,15 +261,17 @@ async function loadDetail(id) {
             </div>
             <div class="border border-slate-200 rounded-2xl overflow-hidden">
                 ${documents.length ? documents.map(doc => `
-                    <div class="grid grid-cols-[minmax(220px,1.5fr)_110px_100px_96px_44px] gap-3 items-center px-4 py-2.5 border-b border-slate-100 last:border-b-0">
+                    <div class="grid grid-cols-[minmax(0,1fr)_110px_110px_96px_40px] gap-3 items-center px-4 py-2.5 border-b border-slate-100 last:border-b-0">
                         <div class="min-w-0">
                             <div class="font-medium truncate">${escapeHtml(doc.filename)}</div>
                             <p class="text-xs text-slate-500 mt-0.5 truncate">${escapeHtml(doc.preview)}</p>
                         </div>
-                        <span class="text-xs text-slate-500">${escapeHtml(doc.content_type || 'text/plain')}</span>
-                        <span class="text-xs text-slate-500">${formatCount(doc.character_count, 'karakter')}</span>
-                        <span class="text-xs text-slate-500">${new Date(doc.created_at).toLocaleDateString('tr-TR')}</span>
-                        <button onclick="deleteDocument(${doc.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
+                        <span class="text-xs text-slate-500 truncate">${escapeHtml(doc.content_type || 'text/plain')}</span>
+                        <span class="text-xs text-slate-500 whitespace-nowrap">${formatCount(doc.character_count, 'karakter')}</span>
+                        <span class="text-xs text-slate-500 whitespace-nowrap">${new Date(doc.created_at).toLocaleDateString('tr-TR')}</span>
+                        <span class="flex justify-end">
+                            <button onclick="deleteDocument(${doc.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
+                        </span>
                     </div>
                 `).join('') : `
                     <div class="px-4 py-10 text-center text-slate-500">

@@ -10,24 +10,12 @@
     <button onclick="openRouteForm()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni route</button>
 </div>
 
-<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
-    <section class="xl:col-span-2 bg-white border border-slate-200 rounded-lg overflow-hidden">
-        <table class="w-full text-sm">
-            <thead class="bg-slate-50 text-slate-600">
-                <tr>
-                    <th class="text-left p-3">Kanal</th>
-                    <th class="text-left p-3">Agent</th>
-                    <th class="text-left p-3">Eslesme</th>
-                    <th class="text-left p-3">Oncelik</th>
-                    <th class="text-left p-3">Status</th>
-                    <th class="text-right p-3">Islem</th>
-                </tr>
-            </thead>
-            <tbody id="routesBody"></tbody>
-        </table>
+<div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
+    <section id="routesBody" class="space-y-4">
+        <div class="bg-white border border-slate-200 rounded-lg p-5 text-slate-400">Yukleniyor...</div>
     </section>
 
-    <aside class="bg-white border border-slate-200 rounded-lg p-5 h-fit">
+    <aside class="bg-white border border-slate-200 rounded-lg p-5 h-fit sticky top-24">
         <h3 class="font-semibold mb-4">Route simulator</h3>
         <div class="space-y-3">
             <select id="simChannel" class="w-full border rounded-md px-3 py-2"></select>
@@ -110,29 +98,134 @@ async function loadRefs() {
 
 async function loadRoutes() {
     routes = await (await api('/api/routes')).json();
-    routesBody.innerHTML = routes.map(r => `
-        <tr class="border-t border-slate-100">
-            <td class="p-3">${r.channel_name}</td>
-            <td class="p-3 font-medium">${r.agent_slug}</td>
-            <td class="p-3"><span class="font-mono">${r.match_type}</span> <span class="text-slate-500">${r.match_value || '-'}</span></td>
-            <td class="p-3">${r.priority}</td>
-            <td class="p-3">${statusBadge(r.active)}</td>
-            <td class="p-3 text-right">
-                <div class="inline-flex items-center gap-2">
-                    <button onclick="openRouteForm(${r.id})" class="icon-btn" title="Duzenle" aria-label="Duzenle"><i data-lucide="pencil"></i></button>
-                    <button onclick="setRouteActive(${r.id}, ${!r.active})" class="icon-btn" title="${r.active ? 'Pasife al' : 'Aktif et'}" aria-label="${r.active ? 'Pasife al' : 'Aktif et'}"><i data-lucide="${r.active ? 'pause' : 'play'}"></i></button>
-                    <button onclick="deleteRoute(${r.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
-                </div>
-            </td>
-        </tr>
-    `).join('');
+    renderGroupedRoutes();
     if (window.lucide) window.lucide.createIcons();
+}
+
+function renderGroupedRoutes() {
+    if (!routes.length) {
+        routesBody.innerHTML = '<div class="bg-white border border-slate-200 rounded-lg p-5 text-slate-500">Henuz route yok.</div>';
+        return;
+    }
+
+    const grouped = channels.map(channel => ({
+        channel,
+        routes: routes
+            .filter(route => route.channel_account_id === channel.id)
+            .sort((a, b) => (a.priority - b.priority) || a.match_type.localeCompare(b.match_type))
+    })).filter(group => group.routes.length);
+
+    routesBody.innerHTML = grouped.map(({channel, routes: groupRoutes}) => {
+        const activeCount = groupRoutes.filter(route => route.active).length;
+        const defaultRoute = groupRoutes.find(route => route.match_type === 'default' && route.active) || groupRoutes.find(route => route.match_type === 'default');
+        const explicitRoutes = groupRoutes.filter(route => route.id !== defaultRoute?.id);
+        return `
+            <section class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+                <div class="flex items-start justify-between gap-4 px-4 py-3 bg-slate-50 border-b border-slate-200">
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2">
+                            <span class="grid place-items-center w-8 h-8 rounded-full ${channelColor(channel.channel_type)}">
+                                <i data-lucide="${channelIcon(channel.channel_type)}" class="w-4 h-4"></i>
+                            </span>
+                            <div class="min-w-0">
+                                <h3 class="font-semibold text-slate-900 truncate">${escapeHtml(channel.name)}</h3>
+                                <p class="text-xs text-slate-500">${escapeHtml(channel.channel_type)} · ${activeCount} aktif route</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="hidden md:inline-flex text-xs px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-600">
+                            Default: ${defaultRoute ? escapeHtml(defaultRoute.agent_slug) : 'yok'}
+                        </span>
+                        <button onclick="openRouteFormForChannel(${channel.id})" class="btn-secondary btn-icon px-3 py-1.5 text-sm"><i data-lucide="plus"></i>Route</button>
+                    </div>
+                </div>
+                ${defaultRoute ? `
+                    <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
+                        <div>
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Default route</div>
+                            <div class="mt-1 text-sm"><span class="font-medium">${escapeHtml(defaultRoute.agent_slug)}</span> <span class="text-slate-400">priority ${defaultRoute.priority}</span></div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            ${statusBadge(defaultRoute.active)}
+                            ${routeActions(defaultRoute)}
+                        </div>
+                    </div>
+                ` : ''}
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="text-xs text-slate-500">
+                            <tr class="border-b border-slate-100">
+                                <th class="text-left px-4 py-2 font-semibold">Match</th>
+                                <th class="text-left px-4 py-2 font-semibold">Type</th>
+                                <th class="text-left px-4 py-2 font-semibold">Agent</th>
+                                <th class="text-left px-4 py-2 font-semibold">Priority</th>
+                                <th class="text-left px-4 py-2 font-semibold">Status</th>
+                                <th class="text-right px-4 py-2 font-semibold">Islem</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${explicitRoutes.length ? explicitRoutes.map(routeRow).join('') : `
+                                <tr>
+                                    <td colspan="6" class="px-4 py-6 text-center text-slate-400">Ek kural yok.</td>
+                                </tr>
+                            `}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        `;
+    }).join('');
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function routeRow(route) {
+    return `
+        <tr class="border-b border-slate-100 last:border-b-0 hover:bg-slate-50">
+            <td class="px-4 py-2.5">
+                <span class="font-mono text-slate-900">${escapeHtml(route.match_value || '-')}</span>
+            </td>
+            <td class="px-4 py-2.5 text-slate-600">${escapeHtml(route.match_type)}</td>
+            <td class="px-4 py-2.5 font-medium">${escapeHtml(route.agent_slug)}</td>
+            <td class="px-4 py-2.5 text-slate-600">${route.priority}</td>
+            <td class="px-4 py-2.5">${statusBadge(route.active)}</td>
+            <td class="px-4 py-2.5 text-right">${routeActions(route)}</td>
+        </tr>
+    `;
+}
+
+function routeActions(route) {
+    return `
+        <div class="inline-flex items-center gap-1">
+            <button onclick="openRouteForm(${route.id})" class="icon-btn" title="Duzenle" aria-label="Duzenle"><i data-lucide="pencil"></i></button>
+            <button onclick="setRouteActive(${route.id}, ${!route.active})" class="icon-btn" title="${route.active ? 'Pasife al' : 'Aktif et'}" aria-label="${route.active ? 'Pasife al' : 'Aktif et'}"><i data-lucide="${route.active ? 'pause' : 'play'}"></i></button>
+            <button onclick="deleteRoute(${route.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
+        </div>
+    `;
 }
 
 function statusBadge(active) {
     return active
         ? '<span class="inline-flex px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-xs font-medium">Aktif</span>'
         : '<span class="inline-flex px-2 py-1 rounded bg-slate-100 text-slate-600 text-xs font-medium">Pasif</span>';
+}
+
+function channelIcon(type) {
+    if (type === 'telegram') return 'send';
+    if (type === 'instagram') return 'instagram';
+    if (type === 'whatsapp') return 'message-circle';
+    return 'radio-tower';
+}
+
+function channelColor(type) {
+    if (type === 'telegram') return 'bg-sky-50 text-sky-700';
+    if (type === 'instagram') return 'bg-pink-50 text-pink-700';
+    if (type === 'whatsapp') return 'bg-emerald-50 text-emerald-700';
+    return 'bg-slate-100 text-slate-600';
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
 
 function openRouteForm(id = null) {
@@ -147,6 +240,12 @@ function openRouteForm(id = null) {
     routeActive.checked = r ? r.active : true;
     if (window.enhanceSelects) window.enhanceSelects(routeDialog);
     routeDialog.showModal();
+}
+
+function openRouteFormForChannel(channelId) {
+    openRouteForm();
+    channelSelect.value = channelId;
+    if (window.enhanceSelects) window.enhanceSelects(routeDialog);
 }
 
 routeForm.addEventListener('submit', async (event) => {

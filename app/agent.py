@@ -3,88 +3,109 @@ from google.genai import types
 from sqlalchemy.orm import Session
 from app.config import GEMINI_API_KEY
 from app.tools import execute_tool
-
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-# Tool tanımları (Gemini function calling formatı)
-tool_definitions = types.Tool(
-    function_declarations=[
-        types.FunctionDeclaration(
-            name="get_menu",
-            description="Restoranın tam menüsünü kategorilere göre getirir. Müşteri menüyü görmek istediğinde veya ne yemek yiyeceğine karar veremediğinde kullan.",
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={},
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="search_menu",
-            description="Menüde arama yapar. Müşteri belirli bir yemek, kategori veya tercih belirttiğinde kullan. Örn: 'acılı', 'vejetaryen', 'pide', 'salata'",
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "query": types.Schema(type=types.Type.STRING, description="Aranacak kelime veya tercih"),
-                },
-                required=["query"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="add_to_cart",
-            description="Sepete ürün ekler. Müşteri bir ürün sipariş etmek istediğinde kullan.",
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "item_id": types.Schema(type=types.Type.INTEGER, description="Menüdeki ürün ID'si (#numara)"),
-                    "quantity": types.Schema(type=types.Type.INTEGER, description="Adet (varsayılan 1)"),
-                    "note": types.Schema(type=types.Type.STRING, description="Müşteri notu: az acılı, extra peynir vb."),
-                },
-                required=["item_id"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="remove_from_cart",
-            description="Sepetten ürün çıkarır.",
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "item_id": types.Schema(type=types.Type.INTEGER, description="Çıkarılacak ürün ID'si"),
-                },
-                required=["item_id"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="get_cart",
-            description="Mevcut sepeti ve toplamı gösterir. Müşteri sepetini görmek istediğinde veya sipariş vermeden önce kullan.",
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={},
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="confirm_order",
-            description="Siparişi onaylar ve işletmeye gönderir. SADECE müşteri onay verdiğinde ve adres bilgisi alındığında kullan.",
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "delivery_address": types.Schema(type=types.Type.STRING, description="Teslimat adresi"),
-                    "payment_method": types.Schema(type=types.Type.STRING, description="Ödeme yöntemi: cash veya card_on_delivery"),
-                },
-                required=["delivery_address"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="get_order_status",
-            description="Mevcut siparişin durumunu sorgular.",
-            parameters=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "order_id": types.Schema(type=types.Type.INTEGER, description="Sipariş numarası"),
-                },
-                required=["order_id"],
-            ),
-        ),
-    ]
+from app.llm import (
+    GEMINI_CLIENT,
+    gemini_tool_from_openai_tools,
+    is_gemini_model,
+    parse_model_ref,
+    run_openai_tool_loop,
 )
+
+client = GEMINI_CLIENT
+
+tool_definitions_openai = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_menu",
+            "description": "Restoranın tam menüsünü kategorilere göre getirir. Müşteri menüyü görmek istediğinde veya ne yemek yiyeceğine karar veremediğinde kullan.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_menu",
+            "description": "Menüde arama yapar. Müşteri belirli bir yemek, kategori veya tercih belirttiğinde kullan. Örn: 'acılı', 'vejetaryen', 'pide', 'salata'",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Aranacak kelime veya tercih"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_to_cart",
+            "description": "Sepete ürün ekler. Müşteri bir ürün sipariş etmek istediğinde kullan.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {"type": "integer", "description": "Menüdeki ürün ID'si (#numara)"},
+                    "quantity": {"type": "integer", "description": "Adet (varsayılan 1)"},
+                    "note": {"type": "string", "description": "Müşteri notu: az acılı, extra peynir vb."},
+                },
+                "required": ["item_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_from_cart",
+            "description": "Sepetten ürün çıkarır.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {"type": "integer", "description": "Çıkarılacak ürün ID'si"},
+                },
+                "required": ["item_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_cart",
+            "description": "Mevcut sepeti ve toplamı gösterir. Müşteri sepetini görmek istediğinde veya sipariş vermeden önce kullan.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confirm_order",
+            "description": "Siparişi onaylar ve işletmeye gönderir. SADECE müşteri onay verdiğinde ve adres bilgisi alındığında kullan.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "delivery_address": {"type": "string", "description": "Teslimat adresi"},
+                    "payment_method": {"type": "string", "description": "Ödeme yöntemi: cash veya card_on_delivery"},
+                },
+                "required": ["delivery_address"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_order_status",
+            "description": "Mevcut siparişin durumunu sorgular.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "integer", "description": "Sipariş numarası"},
+                },
+                "required": ["order_id"],
+            },
+        },
+    },
+]
+
+tool_definitions = gemini_tool_from_openai_tools(tool_definitions_openai)
 
 
 def get_system_prompt(restaurant_name: str) -> str:
@@ -105,6 +126,7 @@ Kurallar:
 
 # Konuşma geçmişi (memory-based, MVP)
 conversations: dict[str, list] = {}
+openai_conversations: dict[str, list[dict]] = {}
 
 
 def chat(
@@ -113,8 +135,11 @@ def chat(
     restaurant_id: int,
     restaurant_name: str,
     db: Session,
+    model: str = "gemini:gemini-2.5-flash",
 ) -> str:
     """Müşteri mesajını işle ve cevap döndür"""
+    if not is_gemini_model(model):
+        return _chat_openai_compatible(customer_id, message, restaurant_id, restaurant_name, db, model)
 
     # Konuşma geçmişini al veya oluştur
     if customer_id not in conversations:
@@ -130,7 +155,7 @@ def chat(
 
     # Gemini'a gönder
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=parse_model_ref(model)[1],
         contents=history,
         config=types.GenerateContentConfig(
             system_instruction=get_system_prompt(restaurant_name),
@@ -179,7 +204,7 @@ def chat(
 
         # Tekrar Gemini'a gönder
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=parse_model_ref(model)[1],
             contents=history,
             config=types.GenerateContentConfig(
                 system_instruction=get_system_prompt(restaurant_name),
@@ -195,5 +220,38 @@ def chat(
     # Geçmişi çok uzamasın diye kırp (son 30 mesaj)
     if len(history) > 30:
         conversations[customer_id] = history[-30:]
+
+    return final_text
+
+
+def _chat_openai_compatible(
+    customer_id: str,
+    message: str,
+    restaurant_id: int,
+    restaurant_name: str,
+    db: Session,
+    model: str,
+) -> str:
+    if customer_id not in openai_conversations:
+        openai_conversations[customer_id] = [
+            {"role": "system", "content": get_system_prompt(restaurant_name)}
+        ]
+
+    history = openai_conversations[customer_id]
+    history.append({"role": "user", "content": message})
+
+    def call_tool(tool_name: str, args: dict) -> str:
+        return execute_tool(tool_name, args, customer_id, db, restaurant_id)
+
+    final_text = run_openai_tool_loop(
+        model,
+        history,
+        tool_definitions_openai,
+        call_tool,
+        max_iterations=5,
+    )
+
+    if len(history) > 32:
+        openai_conversations[customer_id] = [history[0], *history[-31:]]
 
     return final_text

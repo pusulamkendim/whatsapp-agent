@@ -39,7 +39,7 @@
             </label>
             <label class="space-y-1">
                 <span class="text-sm font-medium">Model</span>
-                <input id="agentModel" class="w-full border rounded-md px-3 py-2" value="gemini-2.5-flash">
+                <select id="agentModel" class="w-full border rounded-md px-3 py-2"></select>
             </label>
             <label class="flex items-center gap-2 md:col-span-4">
                 <input id="agentActive" type="checkbox" class="rounded">
@@ -65,6 +65,7 @@
 {% block scripts %}
 <script>
 let agents = [];
+let modelOptions = [];
 
 async function api(path, options = {}) {
     const res = await fetch(path, options);
@@ -73,13 +74,16 @@ async function api(path, options = {}) {
 }
 
 async function loadAgents() {
+    if (!modelOptions.length) {
+        modelOptions = await (await api('/api/llm/models')).json();
+    }
     agents = await (await api('/api/agents')).json();
     agentsGrid.innerHTML = agents.map(agent => `
         <section class="bg-white border border-slate-200 rounded-lg p-5">
             <div class="flex items-start justify-between gap-4 mb-4">
                 <div>
                     <h3 class="text-base font-semibold">${agent.name}</h3>
-                    <p class="text-sm text-slate-500">${agent.slug} · ${agent.type} · ${agent.model}</p>
+                    <p class="text-sm text-slate-500">${agent.slug} · ${agent.type} · ${agent.model_label || agent.model}</p>
                 </div>
                 ${statusBadge(agent.active)}
             </div>
@@ -112,18 +116,43 @@ function escapeHtml(value) {
 
 function openAgentForm(id = null) {
     const agent = agents.find(item => item.id === id);
+    renderModelOptions(agent?.model || 'gemini:gemini-2.5-flash');
     agentFormTitle.textContent = agent ? 'Agent duzenle' : 'Yeni agent';
     agentId.value = agent?.id || '';
     agentSlug.value = agent?.slug || '';
     agentSlug.disabled = Boolean(agent);
     agentName.value = agent?.name || '';
     agentType.value = agent?.type || 'generic_prompt';
-    agentModel.value = agent?.model || 'gemini-2.5-flash';
+    agentModel.value = normalizeModelValue(agent?.model || 'gemini:gemini-2.5-flash');
     agentActive.checked = agent ? agent.active : true;
     agentPrompt.value = agent?.system_prompt || '';
     agentKnowledge.value = agent?.knowledge_base || '';
     if (window.enhanceSelects) window.enhanceSelects(agentDialog);
     agentDialog.showModal();
+}
+
+function renderModelOptions(selectedModel) {
+    const selected = normalizeModelValue(selectedModel);
+    const grouped = modelOptions.reduce((acc, option) => {
+        if (!acc[option.provider]) acc[option.provider] = [];
+        acc[option.provider].push(option);
+        return acc;
+    }, {});
+    agentModel.innerHTML = Object.entries(grouped).map(([provider, options]) => `
+        <optgroup label="${provider}">
+            ${options.map(option => `<option value="${option.model}" data-meta="${option.env || ''}">${option.label}</option>`).join('')}
+        </optgroup>
+    `).join('');
+    if (!Array.from(agentModel.options).some(option => option.value === selected)) {
+        agentModel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(selected)}">${escapeHtml(selected)}</option>`);
+    }
+    agentModel.value = selected;
+}
+
+function normalizeModelValue(value) {
+    if (!value) return 'gemini:gemini-2.5-flash';
+    if (value.includes(':')) return value;
+    return `gemini:${value}`;
 }
 
 agentForm.addEventListener('submit', async (event) => {

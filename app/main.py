@@ -17,6 +17,7 @@ from app.telegram import send_message as tg_send, extract_message as tg_extract,
 from app.instagram import send_message as ig_send, extract_message as ig_extract
 from app import retreat_agent
 from app.agent_registry import run_agent
+from app.llm import MODEL_OPTIONS, provider_label
 from app.models import (
     Agent,
     AgentKnowledgeBase,
@@ -610,6 +611,7 @@ def get_agents():
             "name": a.name,
             "active": a.active,
             "model": a.model,
+            "model_label": provider_label(a.model),
             "system_prompt": a.system_prompt or _default_prompt_preview(a.slug),
             "knowledge_base": a.knowledge_base or "",
         } for a in agents]
@@ -631,7 +633,7 @@ async def create_agent(request: Request):
             slug=slug,
             name=data.get("name") or slug,
             type=data.get("type") or "generic_prompt",
-            model=data.get("model") or "gemini-2.5-flash",
+            model=data.get("model") or "gemini:gemini-2.5-flash",
             system_prompt=data.get("system_prompt", ""),
             knowledge_base=data.get("knowledge_base", ""),
             active=data.get("active", True),
@@ -714,6 +716,11 @@ def _default_prompt_preview(agent_slug: str) -> str:
         from app.agent import get_system_prompt
         return get_system_prompt("Lezzet Durağı")
     return ""
+
+
+@app.get("/api/llm/models")
+def get_llm_models():
+    return MODEL_OPTIONS
 
 
 def _mask_secret(value: str | None) -> str:

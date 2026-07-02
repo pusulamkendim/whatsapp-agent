@@ -148,7 +148,7 @@ function renderGroupedRoutes() {
                         </div>
                     </div>
                 ` : ''}
-                <div class="overflow-x-auto">
+                <div class="hidden md:block overflow-x-auto">
                     <table class="w-full text-sm">
                         <thead class="text-xs text-slate-500">
                             <tr class="border-b border-slate-100">
@@ -169,6 +169,11 @@ function renderGroupedRoutes() {
                         </tbody>
                     </table>
                 </div>
+                <div class="md:hidden divide-y divide-slate-100">
+                    ${explicitRoutes.length ? explicitRoutes.map(routeCard).join('') : `
+                        <div class="px-4 py-6 text-center text-slate-400">Ek kural yok.</div>
+                    `}
+                </div>
             </section>
         `;
     }).join('');
@@ -187,6 +192,24 @@ function routeRow(route) {
             <td class="px-4 py-2.5">${statusBadge(route.active)}</td>
             <td class="px-4 py-2.5 text-right">${routeActions(route)}</td>
         </tr>
+    `;
+}
+
+function routeCard(route) {
+    return `
+        <div class="px-4 py-3">
+            <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                    <div class="font-mono text-sm text-slate-900 truncate">${escapeHtml(route.match_value || '-')}</div>
+                    <div class="mt-1 text-xs text-slate-500">${escapeHtml(route.match_type)} · priority ${route.priority}</div>
+                    <div class="mt-2 text-sm font-medium">${escapeHtml(route.agent_slug)}</div>
+                </div>
+                <div class="flex flex-col items-end gap-2">
+                    ${statusBadge(route.active)}
+                    ${routeActions(route)}
+                </div>
+            </div>
+        </div>
     `;
 }
 

@@ -277,6 +277,10 @@ table th { font-weight: 600; color: #606a78; }
     align-items: center;
 }
 
+.conversation-back {
+    display: none;
+}
+
 dialog.app-modal {
     width: min(var(--modal-width, 720px), calc(100vw - 32px));
     max-height: calc(100dvh - 32px);
@@ -506,6 +510,40 @@ dialog.app-modal::backdrop {
     .responsive-stack {
         grid-template-columns: 1fr !important;
     }
+
+    .conversation-shell {
+        display: block;
+    }
+
+    .conversation-shell .conversation-chat-panel {
+        display: none;
+    }
+
+    .conversation-shell.chat-active .conversation-list-panel {
+        display: none;
+    }
+
+    .conversation-shell.chat-active .conversation-chat-panel {
+        display: block;
+    }
+
+    .conversation-back {
+        display: inline-grid;
+        flex: 0 0 auto;
+    }
+
+    #conv-list {
+        max-height: none !important;
+    }
+
+    #chat-messages {
+        max-height: calc(100dvh - 230px) !important;
+    }
+
+    .knowledge-list-panel,
+    .knowledge-detail-panel {
+        min-height: auto !important;
+    }
 }
 
 @media (max-width: 640px) {
@@ -566,5 +604,19 @@ dialog.app-modal::backdrop {
 
     .hide-on-mobile {
         display: none !important;
+    }
+
+    #chat-messages .max-w-\[78\%\] {
+        max-width: 92% !important;
+    }
+
+    .kb-stats-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .kb-editor-grid .btn-secondary,
+    .kb-editor-grid .btn-primary {
+        width: 100%;
+        justify-content: center;
     }
 }

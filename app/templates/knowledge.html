@@ -10,8 +10,8 @@
     <button onclick="openBaseDialog()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni bilgi bankasi</button>
 </div>
 
-<div class="grid grid-cols-1 xl:grid-cols-[300px_minmax(0,1fr)] gap-4">
-    <aside class="bg-white p-2 min-h-[calc(100vh-180px)]">
+<div class="knowledge-shell grid grid-cols-1 xl:grid-cols-[300px_minmax(0,1fr)] gap-4">
+    <aside class="knowledge-list-panel bg-white p-2 min-h-[calc(100vh-180px)]">
         <div class="flex items-center justify-between px-2 py-1.5 border-b border-slate-100">
             <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Knowledge bases</div>
             <span id="kbCount" class="text-xs text-slate-400"></span>
@@ -19,7 +19,7 @@
         <div id="kbList" class="space-y-0.5 mt-2"></div>
     </aside>
 
-    <section id="kbDetail" class="bg-white p-4 min-h-[calc(100vh-180px)]">
+    <section id="kbDetail" class="knowledge-detail-panel bg-white p-4 min-h-[calc(100vh-180px)]">
         <div class="h-full grid place-items-center text-center text-slate-500">
             <div>
                 <i data-lucide="book-open" class="w-8 h-8 mx-auto mb-3 text-slate-400"></i>
@@ -81,6 +81,8 @@ function formatCount(value, suffix) {
 }
 
 async function loadAll(preferredId = selectedBaseId) {
+    kbList.innerHTML = skeletonCards(3);
+    kbDetail.innerHTML = skeletonCards(3);
     const [kbRes, agentRes] = await Promise.all([
         api('/api/knowledge-bases'),
         api('/api/agents')
@@ -192,7 +194,7 @@ async function loadDetail(id) {
             </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-3 py-4">
+        <div class="kb-stats-grid grid grid-cols-3 gap-3 py-4">
             <div class="rounded-2xl bg-slate-50 px-4 py-3">
                 <div class="text-xs text-slate-500">Dokuman</div>
                 <div class="mt-1 text-lg font-semibold">${formatCount(documents.length, 'dosya')}</div>
@@ -221,7 +223,7 @@ async function loadDetail(id) {
         </section>
 
         <section class="py-4 border-b border-slate-200">
-            <div class="grid grid-cols-1 2xl:grid-cols-[minmax(280px,360px)_minmax(0,1fr)_auto] gap-3 items-start">
+            <div class="kb-editor-grid grid grid-cols-1 2xl:grid-cols-[minmax(280px,360px)_minmax(0,1fr)_auto] gap-3 items-start">
                 <div>
                     <div class="flex items-center gap-2 mb-2">
                         <i data-lucide="upload" class="w-4 h-4 text-slate-500"></i>

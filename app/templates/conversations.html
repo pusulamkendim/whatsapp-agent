@@ -66,7 +66,7 @@ let groupedConversations = {};
 let selectedPhone = null;
 
 async function loadConversations() {
-    const res = await fetch('/api/conversations');
+    const res = await api('/api/conversations');
     if (!res.ok) {
         convListError(`Konusmalar yuklenemedi: HTTP ${res.status}`);
         return;
@@ -88,6 +88,7 @@ async function loadConversations() {
 
 function convListError(message) {
     document.getElementById('conv-list').innerHTML = `<div class="rounded-xl bg-red-50 px-3 py-3 text-sm text-red-700">${escapeHtml(message)}</div>`;
+    showToast(message, {variant: 'error'});
 }
 
 function groupConversations(conversations) {
@@ -109,8 +110,9 @@ function renderList(grouped) {
     const container = document.getElementById('conv-list');
 
     if (!entries.length) {
-        container.innerHTML = `<div class="rounded-xl border border-dashed border-slate-300 px-3 py-4 text-sm text-slate-500">Filtreye uygun konusma yok.</div>`;
+        container.innerHTML = emptyState('Filtreye uygun konusma yok.', 'messages-square');
         renderEmptyChat();
+        if (window.lucide) window.lucide.createIcons();
         return;
     }
 

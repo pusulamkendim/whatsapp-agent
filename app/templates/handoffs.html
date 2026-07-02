@@ -41,7 +41,8 @@ const statusLabels = {
 };
 
 async function loadHandoffs() {
-    const res = await fetch('/api/handoffs');
+    const res = await api('/api/handoffs');
+    if (!res.ok) return;
     const handoffs = await res.json();
 
     const tbody = document.getElementById('handoffs-table');
@@ -86,11 +87,12 @@ async function loadHandoffs() {
 }
 
 async function updateStatus(id, status) {
-    await fetch(`/api/handoffs/${id}`, {
+    await api(`/api/handoffs/${id}`, {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({status})
     });
+    showToast('Durum guncellendi.', {variant: 'success'});
 }
 
 loadHandoffs();

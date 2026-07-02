@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <link rel="stylesheet" href="/static/css/app.css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
@@ -272,7 +273,11 @@
 <body class="bg-white min-h-screen text-zinc-950">
     <header class="fixed top-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-b border-zinc-200">
         <div class="h-16 flex items-center px-7 gap-6">
-            <a href="/dashboard" class="flex items-center gap-3 min-w-64">
+            <button id="sidebarToggle" type="button" class="mobile-menu-button icon-btn" aria-label="Menuyu ac" aria-expanded="false">
+                <i data-lucide="menu"></i>
+            </button>
+
+            <a href="/dashboard" class="brand-lockup flex items-center gap-3 min-w-64">
                 <span class="grid place-items-center w-9 h-9 rounded-lg bg-zinc-950 text-white font-semibold">AL</span>
                 <div>
                     <div class="text-lg font-semibold tracking-tight">AgentLense</div>
@@ -301,7 +306,9 @@
         </div>
     </header>
 
-    <aside class="fixed top-16 bottom-0 left-0 w-72 bg-white border-r border-zinc-200 overflow-y-auto">
+    <div id="sidebarOverlay" class="mobile-sidebar-overlay" aria-hidden="true"></div>
+
+    <aside id="appSidebar" class="app-sidebar fixed top-16 bottom-0 left-0 w-72 bg-white border-r border-zinc-200 overflow-y-auto">
         <div class="p-4">
             <div class="border border-zinc-200 rounded-2xl p-3 mb-5">
                 <div class="text-xs uppercase tracking-wide text-zinc-500 font-semibold">Workspace</div>
@@ -342,12 +349,13 @@
         </div>
     </aside>
 
-    <main class="pt-16 pl-72">
-        <div class="max-w-[1180px] px-10 py-9">
+    <main class="app-main pt-16 pl-72">
+        <div class="app-content max-w-[1180px] px-10 py-9">
             {% block content %}{% endblock %}
         </div>
     </main>
 
+    <script src="/static/js/app.js"></script>
     {% block scripts %}{% endblock %}
     <script>
         function enhanceSelects(root = document) {

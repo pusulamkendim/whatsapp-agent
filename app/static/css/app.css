@@ -1,0 +1,193 @@
+:root {
+    --toast-bg: #ffffff;
+    --toast-text: #202632;
+    --toast-line: #e7e9ee;
+}
+
+.mobile-menu-button {
+    display: none;
+}
+
+.mobile-sidebar-overlay {
+    display: none;
+}
+
+.toast-region {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 120;
+    display: grid;
+    gap: 10px;
+    width: min(420px, calc(100vw - 32px));
+}
+
+.toast {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: start;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--toast-line);
+    border-radius: 16px;
+    background: var(--toast-bg);
+    color: var(--toast-text);
+    box-shadow: 0 18px 60px rgba(15, 23, 42, .14);
+    animation: toast-in .18s ease-out;
+}
+
+.toast[data-variant="success"] { border-color: #bbf7d0; }
+.toast[data-variant="error"] { border-color: #fecaca; }
+.toast[data-variant="warning"] { border-color: #fde68a; }
+.toast[data-variant="info"] { border-color: #bfdbfe; }
+
+.toast-icon {
+    width: 18px;
+    height: 18px;
+    margin-top: 1px;
+}
+
+.toast[data-variant="success"] .toast-icon { color: #15803d; }
+.toast[data-variant="error"] .toast-icon { color: #b91c1c; }
+.toast[data-variant="warning"] .toast-icon { color: #b45309; }
+.toast[data-variant="info"] .toast-icon { color: #2563eb; }
+
+.toast-title {
+    font-weight: 700;
+    font-size: 13px;
+    line-height: 1.25;
+}
+
+.toast-message {
+    margin-top: 2px;
+    color: #667085;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.toast-close {
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    border-radius: 999px !important;
+    border: 0 !important;
+    background: transparent !important;
+    color: #667085 !important;
+}
+
+.state-box {
+    display: grid;
+    place-items: center;
+    min-height: 180px;
+    padding: 28px;
+    border: 1px dashed #d9dce3;
+    border-radius: 18px;
+    color: #667085;
+    text-align: center;
+}
+
+.state-box svg {
+    width: 28px;
+    height: 28px;
+    margin: 0 auto 10px;
+    color: #94a3b8;
+}
+
+.skeleton-line,
+.skeleton-card {
+    position: relative;
+    overflow: hidden;
+    background: #f1f5f9;
+    border-radius: 14px;
+}
+
+.skeleton-line {
+    height: 14px;
+}
+
+.skeleton-card {
+    height: 92px;
+    border: 1px solid #e7e9ee;
+}
+
+.skeleton-line::after,
+.skeleton-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.75), transparent);
+    animation: skeleton-shimmer 1.2s infinite;
+}
+
+@keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes skeleton-shimmer {
+    100% { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+    }
+}
+
+@media (max-width: 1023px) {
+    .mobile-menu-button {
+        display: inline-grid;
+    }
+
+    .app-sidebar {
+        transform: translateX(-100%);
+        transition: transform .18s ease;
+        z-index: 70;
+    }
+
+    body.sidebar-open .app-sidebar {
+        transform: translateX(0);
+    }
+
+    .mobile-sidebar-overlay {
+        position: fixed;
+        inset: 64px 0 0 0;
+        z-index: 60;
+        background: rgba(15, 23, 42, .32);
+        backdrop-filter: blur(2px);
+    }
+
+    body.sidebar-open .mobile-sidebar-overlay {
+        display: block;
+    }
+
+    .app-main {
+        padding-left: 0 !important;
+    }
+
+    .app-content {
+        padding: 24px 18px !important;
+    }
+
+    .brand-lockup {
+        min-width: 0 !important;
+    }
+}
+
+@media (max-width: 640px) {
+    .toast-region {
+        right: 16px;
+        bottom: 16px;
+    }
+
+    dialog {
+        width: calc(100vw - 24px) !important;
+        max-width: calc(100vw - 24px) !important;
+    }
+}

@@ -91,12 +91,6 @@
 let agents = [];
 let modelOptions = [];
 
-async function api(path, options = {}) {
-    const res = await fetch(path, options);
-    if (res.status === 401) location.href = '/login';
-    return res;
-}
-
 async function loadAgents() {
     if (!modelOptions.length) {
         modelOptions = await (await api('/api/llm/models')).json();
@@ -219,6 +213,7 @@ agentForm.addEventListener('submit', async (event) => {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload)
     });
+    showToast('Agent kaydedildi.', {variant: 'success'});
     agentDialog.close();
     loadAgents();
 });
@@ -230,6 +225,7 @@ async function quickSavePrompt(id) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({system_prompt: document.getElementById(`prompt-${id}`).value})
     });
+    showToast('Prompt kaydedildi.', {variant: 'success'});
     loadAgents();
 }
 
@@ -239,12 +235,14 @@ async function setAgentActive(slug, active) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({active})
     });
+    showToast(active ? 'Agent aktif edildi.' : 'Agent pasife alindi.', {variant: 'success'});
     loadAgents();
 }
 
 async function deleteAgent(id) {
-    if (!confirm('Agent pasife alinsin mi? Bagli route kayitlari da pasife alinir.')) return;
+    if (!confirmAction('Agent pasife alinsin mi? Bagli route kayitlari da pasife alinir.')) return;
     await api(`/api/agents/${id}`, {method: 'DELETE'});
+    showToast('Agent pasife alindi.', {variant: 'success'});
     loadAgents();
 }
 

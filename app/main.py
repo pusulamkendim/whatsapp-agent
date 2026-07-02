@@ -8,6 +8,7 @@ from collections import OrderedDict
 from datetime import date
 from fastapi import FastAPI, Request, Query, BackgroundTasks, UploadFile, File
 from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from app.config import WHATSAPP_VERIFY_TOKEN
@@ -44,6 +45,7 @@ from app.router import find_channel_account, resolve_route
 
 app = FastAPI(title="WhatsApp Multi-Agent")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 ADMIN_SECRET = os.getenv("ADMIN_PASSWORD") or os.getenv("ADMIN_TOKEN") or ""
 ADMIN_COOKIE = "agent_admin_session"

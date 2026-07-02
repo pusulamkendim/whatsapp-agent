@@ -52,7 +52,8 @@
 <script>
 async function loadDashboard() {
     // Stats
-    const statsRes = await fetch('/api/stats?days=7');
+    const statsRes = await api('/api/stats?days=7');
+    if (!statsRes.ok) return;
     const stats = await statsRes.json();
 
     if (stats.length > 0) {
@@ -84,7 +85,8 @@ async function loadDashboard() {
     });
 
     // Recent conversations
-    const convRes = await fetch('/api/conversations');
+    const convRes = await api('/api/conversations');
+    if (!convRes.ok) return;
     const convs = await convRes.json();
 
     const grouped = {};

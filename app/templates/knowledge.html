@@ -70,12 +70,6 @@ let agents = [];
 let documents = [];
 let selectedBaseId = null;
 
-async function api(path, options = {}) {
-    const res = await fetch(path, options);
-    if (res.status === 401) location.href = '/login';
-    return res;
-}
-
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
@@ -113,6 +107,7 @@ async function loadAll(preferredId = selectedBaseId) {
                 </div>
             </div>
         `;
+        showToast('Bilgi bankalari yuklenemedi.', {variant: 'error'});
         if (window.lucide) window.lucide.createIcons();
         return;
     }
@@ -321,9 +316,10 @@ baseForm.addEventListener('submit', async (event) => {
     if (data.knowledge_base?.id && baseFiles.files.length) {
         const uploadRes = await uploadFilesForBase(data.knowledge_base.id, Array.from(baseFiles.files));
         if (!uploadRes.ok) {
-            alert(JSON.stringify(await uploadRes.json()));
+            showToast(JSON.stringify(await uploadRes.json()), {variant: 'error', title: 'Dosya yuklenemedi'});
         }
     }
+    showToast('Bilgi bankasi olusturuldu.', {variant: 'success'});
     await loadAll(data.knowledge_base?.id);
 });
 
@@ -338,12 +334,14 @@ async function toggleBaseActive(id, active) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({active})
     });
+    showToast(active ? 'Bilgi bankasi aktif edildi.' : 'Bilgi bankasi pasife alindi.', {variant: 'success'});
     await loadAll(id);
 }
 
 async function deleteBase(id) {
-    if (!confirm('Bilgi bankasi pasife alinsin mi? Agent baglantilari da pasife alinir.')) return;
+    if (!confirmAction('Bilgi bankasi pasife alinsin mi? Agent baglantilari da pasife alinir.')) return;
     await api(`/api/knowledge-bases/${id}`, {method: 'DELETE'});
+    showToast('Bilgi bankasi pasife alindi.', {variant: 'success'});
     await loadAll();
 }
 
@@ -354,6 +352,7 @@ async function saveAgentLinks() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({agent_ids})
     });
+    showToast('Agent baglantilari kaydedildi.', {variant: 'success'});
     await loadAll(selectedBaseId);
 }
 
@@ -367,9 +366,10 @@ async function uploadFiles() {
     if (!files.length) return;
     const res = await uploadFilesForBase(selectedBaseId, files);
     if (!res.ok) {
-        alert(JSON.stringify(await res.json()));
+        showToast(JSON.stringify(await res.json()), {variant: 'error', title: 'Dosya yuklenemedi'});
         return;
     }
+    showToast('Dosyalar yuklendi.', {variant: 'success'});
     await loadAll(selectedBaseId);
 }
 
@@ -389,12 +389,14 @@ async function addManualDocument() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({filename: manualFilename.value, content: manualContent.value})
     });
+    showToast('Not eklendi.', {variant: 'success'});
     await loadAll(selectedBaseId);
 }
 
 async function deleteDocument(id) {
-    if (!confirm('Dokuman silinsin mi?')) return;
+    if (!confirmAction('Dokuman silinsin mi?')) return;
     await api(`/api/knowledge-documents/${id}`, {method: 'DELETE'});
+    showToast('Dokuman silindi.', {variant: 'success'});
     await loadAll(selectedBaseId);
 }
 

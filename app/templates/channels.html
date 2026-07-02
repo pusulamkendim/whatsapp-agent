@@ -81,12 +81,6 @@
 <script>
 let channels = [];
 
-async function api(path, options = {}) {
-    const res = await fetch(path, options);
-    if (res.status === 401) location.href = '/login';
-    return res;
-}
-
 async function loadChannels() {
     const res = await api('/api/channels');
     channels = await res.json();
@@ -150,6 +144,7 @@ channelForm.addEventListener('submit', async (event) => {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload)
     });
+    showToast('Kanal kaydedildi.', {variant: 'success'});
     channelDialog.close();
     loadChannels();
 });
@@ -160,12 +155,14 @@ async function setChannelActive(id, active) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({active})
     });
+    showToast(active ? 'Kanal aktif edildi.' : 'Kanal pasife alindi.', {variant: 'success'});
     loadChannels();
 }
 
 async function deleteChannel(id) {
-    if (!confirm('Kanal pasife alinsin mi? Bagli route kayitlari da pasife alinir.')) return;
+    if (!confirmAction('Kanal pasife alinsin mi? Bagli route kayitlari da pasife alinir.')) return;
     await api(`/api/channels/${id}`, {method: 'DELETE'});
+    showToast('Kanal pasife alindi.', {variant: 'success'});
     loadChannels();
 }
 

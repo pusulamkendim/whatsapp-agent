@@ -80,12 +80,6 @@ let channels = [];
 let agents = [];
 let routes = [];
 
-async function api(path, options = {}) {
-    const res = await fetch(path, options);
-    if (res.status === 401) location.href = '/login';
-    return res;
-}
-
 async function loadRefs() {
     channels = await (await api('/api/channels')).json();
     agents = await (await api('/api/agents')).json();
@@ -104,7 +98,8 @@ async function loadRoutes() {
 
 function renderGroupedRoutes() {
     if (!routes.length) {
-        routesBody.innerHTML = '<div class="bg-white border border-slate-200 rounded-lg p-5 text-slate-500">Henuz route yok.</div>';
+        routesBody.innerHTML = emptyState('Henuz route yok.', 'route', '<button onclick="openRouteForm()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni route</button>');
+        if (window.lucide) window.lucide.createIcons();
         return;
     }
 
@@ -264,6 +259,7 @@ routeForm.addEventListener('submit', async (event) => {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload)
     });
+    showToast('Route kaydedildi.', {variant: 'success'});
     routeDialog.close();
     loadRoutes();
 });
@@ -274,12 +270,14 @@ async function setRouteActive(id, active) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({active})
     });
+    showToast(active ? 'Route aktif edildi.' : 'Route pasife alindi.', {variant: 'success'});
     loadRoutes();
 }
 
 async function deleteRoute(id) {
-    if (!confirm('Route pasife alinsin mi?')) return;
+    if (!confirmAction('Route pasife alinsin mi?')) return;
     await api(`/api/routes/${id}`, {method: 'DELETE'});
+    showToast('Route pasife alindi.', {variant: 'success'});
     loadRoutes();
 }
 

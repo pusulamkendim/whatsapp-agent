@@ -5,7 +5,7 @@ import hashlib
 import secrets
 import re
 from collections import OrderedDict
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from fastapi import FastAPI, Request, Query, BackgroundTasks, UploadFile, File
 from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -912,21 +912,35 @@ async def test_llm_model(request: Request):
 
 
 @app.get("/api/llm/usage")
-def get_llm_usage(limit: int = Query(20, ge=1, le=100)):
+def get_llm_usage(
+    limit: int = Query(20, ge=1, le=100),
+    days: int = Query(7, ge=1, le=90),
+):
     db = SessionLocal()
     try:
-        rows = db.query(LlmUsageLog).order_by(LlmUsageLog.created_at.desc()).limit(limit).all()
-        total = db.query(LlmUsageLog).count()
-        errors = db.query(LlmUsageLog).filter(LlmUsageLog.success == False).count()
-        token_rows = db.query(LlmUsageLog.total_tokens).all()
-        total_tokens = sum(row.total_tokens or 0 for row in token_rows)
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        base_query = db.query(LlmUsageLog).filter(LlmUsageLog.created_at >= since)
+        rows = base_query.order_by(LlmUsageLog.created_at.desc()).limit(limit).all()
+        all_rows = base_query.all()
+        total = len(all_rows)
+        errors = sum(1 for row in all_rows if not row.success)
+        total_tokens = sum(row.total_tokens or 0 for row in all_rows)
+        prompt_tokens = sum(row.prompt_tokens or 0 for row in all_rows)
+        completion_tokens = sum(row.completion_tokens or 0 for row in all_rows)
+        latencies = [row.latency_ms for row in all_rows if row.latency_ms is not None]
         return {
             "summary": {
                 "total_calls": total,
                 "errors": errors,
                 "total_tokens": total_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "avg_latency_ms": round(sum(latencies) / len(latencies)) if latencies else None,
                 "success_rate": round(((total - errors) / total) * 100, 1) if total else 0,
+                "days": days,
             },
+            "by_provider": _usage_breakdown(all_rows, "provider"),
+            "by_model": _usage_breakdown(all_rows, "model_ref"),
             "logs": [{
                 "id": row.id,
                 "agent_id": row.agent_id,
@@ -946,6 +960,33 @@ def get_llm_usage(limit: int = Query(20, ge=1, le=100)):
         }
     finally:
         db.close()
+
+
+def _usage_breakdown(rows: list[LlmUsageLog], field: str) -> list[dict]:
+    grouped: dict[str, list[LlmUsageLog]] = {}
+    for row in rows:
+        key = getattr(row, field) or "unknown"
+        grouped.setdefault(key, []).append(row)
+
+    items = []
+    for key, group in grouped.items():
+        total = len(group)
+        errors = sum(1 for row in group if not row.success)
+        total_tokens = sum(row.total_tokens or 0 for row in group)
+        prompt_tokens = sum(row.prompt_tokens or 0 for row in group)
+        completion_tokens = sum(row.completion_tokens or 0 for row in group)
+        latencies = [row.latency_ms for row in group if row.latency_ms is not None]
+        items.append({
+            "key": key,
+            "calls": total,
+            "errors": errors,
+            "success_rate": round(((total - errors) / total) * 100, 1) if total else 0,
+            "total_tokens": total_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "avg_latency_ms": round(sum(latencies) / len(latencies)) if latencies else None,
+        })
+    return sorted(items, key=lambda item: (item["total_tokens"], item["calls"]), reverse=True)
 
 
 def _llm_provider_payload(provider: LlmProvider) -> dict:

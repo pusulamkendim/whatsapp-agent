@@ -281,6 +281,10 @@ table th { font-weight: 600; color: #606a78; }
     display: none;
 }
 
+.usage-range {
+    min-height: 30px;
+}
+
 dialog.app-modal {
     width: min(var(--modal-width, 720px), calc(100vw - 32px));
     max-height: calc(100dvh - 32px);
@@ -618,5 +622,10 @@ dialog.app-modal::backdrop {
     .kb-editor-grid .btn-primary {
         width: 100%;
         justify-content: center;
+    }
+
+    .usage-range {
+        padding-left: 10px !important;
+        padding-right: 10px !important;
     }
 }

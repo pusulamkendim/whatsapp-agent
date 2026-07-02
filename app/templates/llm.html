@@ -28,6 +28,40 @@
     </section>
 </div>
 
+<section class="panel p-5 mt-6">
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+        <div>
+            <h3 class="font-semibold">LLM kullanimi</h3>
+            <p id="usageSummary" class="text-sm text-slate-500 mt-0.5"></p>
+        </div>
+        <div class="inline-flex rounded-full border border-slate-200 p-1 bg-white w-fit">
+            <button onclick="setUsageDays(1)" class="usage-range btn-secondary px-3 py-1.5 text-xs" data-days="1">1 gun</button>
+            <button onclick="setUsageDays(7)" class="usage-range btn-secondary px-3 py-1.5 text-xs" data-days="7">7 gun</button>
+            <button onclick="setUsageDays(30)" class="usage-range btn-secondary px-3 py-1.5 text-xs" data-days="30">30 gun</button>
+        </div>
+    </div>
+    <div id="usageCards" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 mb-4"></div>
+    <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-4">
+        <div class="space-y-4">
+            <div>
+                <h4 class="text-sm font-semibold mb-2">Provider kirilimi</h4>
+                <div id="providerUsage" class="space-y-2"></div>
+            </div>
+            <div>
+                <h4 class="text-sm font-semibold mb-2">Model kirilimi</h4>
+                <div id="modelUsage" class="space-y-2"></div>
+            </div>
+        </div>
+        <div>
+            <div class="flex items-center justify-between mb-2">
+                <h4 class="text-sm font-semibold">Son cagri loglari</h4>
+                <span id="usageLogCount" class="text-xs text-slate-400"></span>
+            </div>
+            <div id="usageList" class="space-y-2"></div>
+        </div>
+    </div>
+</section>
+
 <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-6">
     <section class="panel p-5">
         <h3 class="font-semibold mb-4">Model testi</h3>
@@ -40,11 +74,11 @@
     </section>
 
     <section class="panel p-5">
-        <div class="flex items-center justify-between mb-4">
-            <h3 class="font-semibold">Son LLM kullanimi</h3>
-            <span id="usageSummary" class="text-sm text-slate-500"></span>
+        <h3 class="font-semibold mb-4">Notlar</h3>
+        <div class="space-y-3 text-sm text-slate-600">
+            <p>Free modeller upstream rate limit verebilir. Agent fallback modelini bos birakma.</p>
+            <p>Token verisi provider response'undan gelir; eski loglarda bos kalabilir.</p>
         </div>
-        <div id="usageList" class="space-y-2"></div>
     </section>
 </div>
 
@@ -142,15 +176,19 @@
 let providers = [];
 let models = [];
 let usage = {};
+let usageDays = 7;
 
 async function loadAll() {
     providerList.innerHTML = skeletonCards(3);
     modelList.innerHTML = skeletonCards(4);
+    usageCards.innerHTML = skeletonCards(4);
+    providerUsage.innerHTML = skeletonCards(2);
+    modelUsage.innerHTML = skeletonCards(3);
     usageList.innerHTML = skeletonCards(3);
     const [providerRes, modelRes, usageRes] = await Promise.all([
         api('/api/llm/providers'),
         api('/api/llm/models'),
-        api('/api/llm/usage?limit=12')
+        api(`/api/llm/usage?limit=12&days=${usageDays}`)
     ]);
     providers = await providerRes.json();
     models = await modelRes.json();
@@ -209,7 +247,17 @@ function renderModels() {
 }
 
 function renderUsage() {
-    usageSummary.textContent = `${usage.summary?.total_calls || 0} cagri · ${formatNumber(usage.summary?.total_tokens || 0)} token · %${usage.summary?.success_rate || 0} basari`;
+    const summary = usage.summary || {};
+    usageSummary.textContent = `Son ${summary.days || usageDays} gun · ${formatNumber(summary.total_calls || 0)} cagri · ${formatNumber(summary.total_tokens || 0)} token`;
+    usageCards.innerHTML = [
+        usageCard('Cagri', formatNumber(summary.total_calls || 0), `${formatNumber(summary.errors || 0)} hata`, 'activity'),
+        usageCard('Token', formatNumber(summary.total_tokens || 0), `in ${formatNumber(summary.prompt_tokens || 0)} / out ${formatNumber(summary.completion_tokens || 0)}`, 'coins'),
+        usageCard('Basari', `%${summary.success_rate || 0}`, 'success rate', 'check-circle-2'),
+        usageCard('Latency', summary.avg_latency_ms ? `${summary.avg_latency_ms} ms` : '-', 'ortalama', 'timer')
+    ].join('');
+    providerUsage.innerHTML = renderBreakdown(usage.by_provider || [], 'server');
+    modelUsage.innerHTML = renderBreakdown(usage.by_model || [], 'brain-circuit');
+    usageLogCount.textContent = `${(usage.logs || []).length} log`;
     usageList.innerHTML = (usage.logs || []).map(log => `
         <div class="border border-slate-200 rounded-lg px-4 py-3">
             <div class="flex items-start justify-between gap-3">
@@ -228,6 +276,59 @@ function renderUsage() {
             </div>
         </div>
     `).join('');
+    if (!(usage.logs || []).length) {
+        usageList.innerHTML = emptyState('Bu aralikta LLM cagrisi yok.', 'activity');
+    }
+    updateUsageRangeButtons();
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function usageCard(label, value, meta, icon) {
+    return `
+        <div class="rounded-2xl bg-slate-50 border border-slate-100 px-4 py-3">
+            <div class="flex items-center justify-between gap-3">
+                <div class="text-xs text-slate-500">${label}</div>
+                <i data-lucide="${icon}" class="w-4 h-4 text-slate-400"></i>
+            </div>
+            <div class="mt-2 text-xl font-semibold text-slate-900">${value}</div>
+            <div class="mt-1 text-xs text-slate-500">${meta}</div>
+        </div>
+    `;
+}
+
+function renderBreakdown(items, icon) {
+    if (!items.length) return emptyState('Veri yok.', icon);
+    const maxTokens = Math.max(...items.map(item => item.total_tokens || 0), 1);
+    return items.slice(0, 6).map(item => {
+        const width = Math.max(4, Math.round(((item.total_tokens || 0) / maxTokens) * 100));
+        return `
+            <div class="rounded-2xl border border-slate-200 px-4 py-3">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="font-medium truncate">${escapeHtml(item.key)}</div>
+                        <div class="text-xs text-slate-500 mt-1">${formatNumber(item.calls)} cagri · ${formatNumber(item.total_tokens)} token · %${item.success_rate}</div>
+                    </div>
+                    <span class="text-xs px-2 py-1 rounded ${item.errors ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}">${item.errors ? `${item.errors} hata` : 'ok'}</span>
+                </div>
+                <div class="mt-3 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                    <div class="h-full rounded-full bg-blue-500" style="width:${width}%"></div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function setUsageDays(days) {
+    usageDays = days;
+    loadAll();
+}
+
+function updateUsageRangeButtons() {
+    document.querySelectorAll('.usage-range').forEach(button => {
+        const active = Number(button.dataset.days) === usageDays;
+        button.classList.toggle('btn-primary', active);
+        button.classList.toggle('btn-secondary', !active);
+    });
 }
 
 function renderTestModels() {

@@ -4,6 +4,7 @@ import hmac
 import hashlib
 import secrets
 import re
+import threading
 from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
 from fastapi import FastAPI, Request, Query, BackgroundTasks, UploadFile, File
@@ -18,6 +19,7 @@ from app.telegram import send_message as tg_send, extract_message as tg_extract,
 from app.instagram import send_message as ig_send, extract_message as ig_extract
 from app import retreat_agent
 from app.agent_registry import run_agent
+from app.pricing import sync_llm_prices
 from app.llm import (
     MODEL_OPTIONS,
     capture_llm_usage,
@@ -61,6 +63,7 @@ MAX_PROCESSED = 1000
 @app.on_event("startup")
 def startup():
     init_db()
+    threading.Thread(target=_sync_prices_on_startup, daemon=True).start()
     # Restoran menü verisi yükle (SQLite sıfırlanırsa diye)
     from app.models import Restaurant, MenuItem
     db = SessionLocal()
@@ -80,6 +83,17 @@ def startup():
         message = "production'da dashboard/API kilitli" if IS_PRODUCTION else "dashboard/API auth devre dışı"
         print(f"⚠️ ADMIN_PASSWORD/ADMIN_TOKEN yok; {message}.")
     print("✅ Multi-Agent başlatıldı! (WhatsApp + Telegram)")
+
+
+def _sync_prices_on_startup():
+    if os.getenv("LLM_PRICE_SYNC_ON_STARTUP", "true").lower() in {"0", "false", "no"}:
+        return
+    try:
+        result = sync_llm_prices(force=False, stale_after_hours=24)
+        if result.get("updated") or result.get("errors"):
+            print(f"💸 LLM price sync: {result}")
+    except Exception as exc:
+        print(f"⚠️ LLM price sync atlandı: {type(exc).__name__}")
 
 
 @app.middleware("http")
@@ -886,6 +900,14 @@ def delete_llm_model(model_id: int):
         db.close()
 
 
+@app.post("/api/llm/prices/sync")
+def sync_llm_model_prices():
+    try:
+        return {"ok": True, "result": sync_llm_prices(force=True)}
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)[:800]}, status_code=500)
+
+
 @app.post("/api/llm/models/test")
 async def test_llm_model(request: Request):
     data = await request.json()
@@ -1027,6 +1049,9 @@ def _llm_model_payload(model: LlmModel) -> dict:
         "context_window": model.context_window,
         "input_price": model.input_price,
         "output_price": model.output_price,
+        "pricing_source": model.pricing_source or "",
+        "pricing_checked_at": model.pricing_checked_at.isoformat() if model.pricing_checked_at else "",
+        "pricing_sync_error": model.pricing_sync_error or "",
         "rate_limit_rpm": model.rate_limit_rpm,
         "rate_limit_tpm": model.rate_limit_tpm,
         "active": model.active,

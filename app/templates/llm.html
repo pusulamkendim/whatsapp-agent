@@ -7,7 +7,10 @@
         <h2 class="text-xl font-semibold text-slate-900">LLM Models</h2>
         <p class="text-slate-500 mt-1">Provider, model, fallback ve kullanim limitlerini yonet.</p>
     </div>
-    <button onclick="openModelDialog()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni model</button>
+    <div class="flex items-center gap-2">
+        <button onclick="syncPrices()" class="btn-secondary btn-icon px-4 py-2"><i data-lucide="refresh-cw"></i>Fiyatlari guncelle</button>
+        <button onclick="openModelDialog()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni model</button>
+    </div>
 </div>
 
 <div class="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-6">
@@ -243,6 +246,8 @@ function renderModels() {
                         ${model.supports_tools ? '<span class="px-2 py-1 rounded bg-emerald-50 text-emerald-700">tools</span>' : ''}
                         ${model.rate_limit_rpm ? `<span class="px-2 py-1 rounded bg-amber-50 text-amber-700">${model.rate_limit_rpm} rpm</span>` : ''}
                         ${priceSummary(model)}
+                        ${model.pricing_checked_at ? `<span class="px-2 py-1 rounded bg-slate-100">fiyat ${formatDateTime(model.pricing_checked_at)}</span>` : ''}
+                        ${model.pricing_sync_error ? `<span class="px-2 py-1 rounded bg-rose-50 text-rose-700">${escapeHtml(model.pricing_sync_error)}</span>` : ''}
                     </div>
                 </div>
                 <div class="flex items-center gap-2">
@@ -431,6 +436,19 @@ async function deleteModel(id) {
     loadAll();
 }
 
+async function syncPrices() {
+    showToast('Model fiyatlari guncelleniyor...', {variant: 'info'});
+    const res = await api('/api/llm/prices/sync', {method: 'POST'});
+    const data = await res.json();
+    if (!data.ok) {
+        showToast(data.error || 'Fiyatlar guncellenemedi.', {variant: 'error'});
+        return;
+    }
+    const result = data.result || {};
+    showToast(`${result.updated || 0} model fiyati guncellendi.`, {variant: result.errors ? 'warning' : 'success'});
+    loadAll();
+}
+
 async function testSelectedModel() {
     await runModelTest(testModel.value);
 }
@@ -465,6 +483,11 @@ function formatPrice(value) {
 function formatMoney(value) {
     const amount = Number(value || 0);
     return `$${amount.toLocaleString('en-US', {minimumFractionDigits: 4, maximumFractionDigits: 6})}`;
+}
+
+function formatDateTime(value) {
+    if (!value) return '';
+    return new Date(value).toLocaleString('tr-TR', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'});
 }
 
 function formatToken(value) {

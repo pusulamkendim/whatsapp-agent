@@ -91,6 +91,7 @@ def _log_llm_usage(
 ):
     provider = parse_model_ref(model_ref)[0]
     usage = usage or {}
+    estimated_cost = _estimate_llm_cost(db, model_ref, usage)
     try:
         db.add(LlmUsageLog(
             agent_id=agent.id,
@@ -99,6 +100,7 @@ def _log_llm_usage(
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
             total_tokens=usage.get("total_tokens"),
+            estimated_cost=estimated_cost,
             latency_ms=latency_ms,
             success=success,
             error_code=type(error).__name__ if error else "",
@@ -108,6 +110,18 @@ def _log_llm_usage(
     except Exception as log_exc:
         db.rollback()
         print(f"⚠️ LLM usage log hatası: {log_exc}")
+
+
+def _estimate_llm_cost(db: Session, model_ref: str, usage: dict) -> float | None:
+    model = db.query(LlmModel).filter(LlmModel.model_ref == model_ref).first()
+    if not model or (model.input_price is None and model.output_price is None):
+        return None
+
+    prompt_tokens = usage.get("prompt_tokens") or 0
+    completion_tokens = usage.get("completion_tokens") or 0
+    input_price = model.input_price or 0
+    output_price = model.output_price or 0
+    return ((prompt_tokens * input_price) + (completion_tokens * output_price)) / 1_000_000
 
 
 def _rate_limit_error(db: Session, model_ref: str) -> str | None:

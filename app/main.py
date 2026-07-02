@@ -927,6 +927,7 @@ def get_llm_usage(
         total_tokens = sum(row.total_tokens or 0 for row in all_rows)
         prompt_tokens = sum(row.prompt_tokens or 0 for row in all_rows)
         completion_tokens = sum(row.completion_tokens or 0 for row in all_rows)
+        estimated_cost = sum(row.estimated_cost or 0 for row in all_rows)
         latencies = [row.latency_ms for row in all_rows if row.latency_ms is not None]
         return {
             "summary": {
@@ -935,6 +936,7 @@ def get_llm_usage(
                 "total_tokens": total_tokens,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
+                "estimated_cost": estimated_cost,
                 "avg_latency_ms": round(sum(latencies) / len(latencies)) if latencies else None,
                 "success_rate": round(((total - errors) / total) * 100, 1) if total else 0,
                 "days": days,
@@ -975,6 +977,7 @@ def _usage_breakdown(rows: list[LlmUsageLog], field: str) -> list[dict]:
         total_tokens = sum(row.total_tokens or 0 for row in group)
         prompt_tokens = sum(row.prompt_tokens or 0 for row in group)
         completion_tokens = sum(row.completion_tokens or 0 for row in group)
+        estimated_cost = sum(row.estimated_cost or 0 for row in group)
         latencies = [row.latency_ms for row in group if row.latency_ms is not None]
         items.append({
             "key": key,
@@ -984,6 +987,7 @@ def _usage_breakdown(rows: list[LlmUsageLog], field: str) -> list[dict]:
             "total_tokens": total_tokens,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+            "estimated_cost": estimated_cost,
             "avg_latency_ms": round(sum(latencies) / len(latencies)) if latencies else None,
         })
     return sorted(items, key=lambda item: (item["total_tokens"], item["calls"]), reverse=True)
@@ -1036,8 +1040,8 @@ def _apply_llm_model_payload(model: LlmModel, data: dict, provider: LlmProvider)
     model.supports_tools = data.get("supports_tools", model.supports_tools or False)
     model.supports_vision = data.get("supports_vision", model.supports_vision or False)
     model.context_window = data.get("context_window") or None
-    model.input_price = data.get("input_price") or None
-    model.output_price = data.get("output_price") or None
+    model.input_price = data.get("input_price") if data.get("input_price") is not None else None
+    model.output_price = data.get("output_price") if data.get("output_price") is not None else None
     model.rate_limit_rpm = data.get("rate_limit_rpm") or None
     model.rate_limit_tpm = data.get("rate_limit_tpm") or None
     model.active = data.get("active", model.active if model.active is not None else True)

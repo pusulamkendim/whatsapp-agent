@@ -12,14 +12,14 @@
 
 <div id="agentsGrid" class="grid grid-cols-1 xl:grid-cols-2 gap-6"></div>
 
-<dialog id="agentDialog" class="rounded-lg w-full max-w-4xl p-0 backdrop:bg-slate-950/50">
-    <form id="agentForm" class="bg-white p-6 space-y-4">
-        <div class="flex items-start justify-between">
-            <h3 id="agentFormTitle" class="text-base font-semibold">Agent</h3>
+<dialog id="agentDialog" class="app-modal" style="--modal-width: 920px">
+    <form id="agentForm" class="app-modal-panel">
+        <div class="app-modal-header">
+            <h3 id="agentFormTitle" class="app-modal-title">Agent</h3>
             <button type="button" onclick="agentDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
         </div>
         <input id="agentId" type="hidden">
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="app-modal-body grid grid-cols-1 md:grid-cols-4 gap-4">
             <label class="space-y-1">
                 <span class="text-sm font-medium">Slug</span>
                 <input id="agentSlug" class="w-full border rounded-md px-3 py-2">
@@ -78,7 +78,7 @@
                 <textarea id="agentKnowledge" rows="6" class="w-full border rounded-md px-3 py-2 font-mono text-sm"></textarea>
             </label>
         </div>
-        <div class="flex justify-end gap-2 pt-2">
+        <div class="app-modal-footer">
             <button type="button" onclick="agentDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
             <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Kaydet</button>
         </div>
@@ -92,6 +92,7 @@ let agents = [];
 let modelOptions = [];
 
 async function loadAgents() {
+    agentsGrid.innerHTML = skeletonCards(4);
     if (!modelOptions.length) {
         modelOptions = await (await api('/api/llm/models')).json();
     }

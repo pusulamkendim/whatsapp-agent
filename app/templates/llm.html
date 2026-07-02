@@ -48,48 +48,50 @@
     </section>
 </div>
 
-<dialog id="providerDialog" class="rounded-lg w-full max-w-xl p-0 backdrop:bg-slate-950/50">
-    <form id="providerForm" class="bg-white p-6 space-y-4">
-        <div class="flex items-start justify-between">
-            <h3 class="text-base font-semibold">Provider</h3>
+<dialog id="providerDialog" class="app-modal" style="--modal-width: 620px">
+    <form id="providerForm" class="app-modal-panel">
+        <div class="app-modal-header">
+            <h3 class="app-modal-title">Provider</h3>
             <button type="button" onclick="providerDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
         </div>
         <input id="providerId" type="hidden">
-        <label class="block space-y-1">
-            <span class="text-sm font-medium">Slug</span>
-            <input id="providerSlug" class="w-full border px-3 py-2" placeholder="openrouter">
-        </label>
-        <label class="block space-y-1">
-            <span class="text-sm font-medium">Ad</span>
-            <input id="providerName" class="w-full border px-3 py-2" placeholder="OpenRouter">
-        </label>
-        <label class="block space-y-1">
-            <span class="text-sm font-medium">Base URL</span>
-            <input id="providerBaseUrl" class="w-full border px-3 py-2" placeholder="https://openrouter.ai/api/v1">
-        </label>
-        <label class="block space-y-1">
-            <span class="text-sm font-medium">API key env</span>
-            <input id="providerApiKeyEnv" class="w-full border px-3 py-2" placeholder="OPENROUTER_API_KEY">
-        </label>
-        <label class="flex items-center gap-2">
-            <input id="providerActive" type="checkbox" class="rounded">
-            <span class="text-sm font-medium">Aktif</span>
-        </label>
-        <div class="flex justify-end gap-2 pt-2">
+        <div class="app-modal-body space-y-4">
+            <label class="block space-y-1">
+                <span class="text-sm font-medium">Slug</span>
+                <input id="providerSlug" class="w-full border px-3 py-2" placeholder="openrouter">
+            </label>
+            <label class="block space-y-1">
+                <span class="text-sm font-medium">Ad</span>
+                <input id="providerName" class="w-full border px-3 py-2" placeholder="OpenRouter">
+            </label>
+            <label class="block space-y-1">
+                <span class="text-sm font-medium">Base URL</span>
+                <input id="providerBaseUrl" class="w-full border px-3 py-2" placeholder="https://openrouter.ai/api/v1">
+            </label>
+            <label class="block space-y-1">
+                <span class="text-sm font-medium">API key env</span>
+                <input id="providerApiKeyEnv" class="w-full border px-3 py-2" placeholder="OPENROUTER_API_KEY">
+            </label>
+            <label class="flex items-center gap-2">
+                <input id="providerActive" type="checkbox" class="rounded">
+                <span class="text-sm font-medium">Aktif</span>
+            </label>
+        </div>
+        <div class="app-modal-footer">
             <button type="button" onclick="providerDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
             <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Kaydet</button>
         </div>
     </form>
 </dialog>
 
-<dialog id="modelDialog" class="rounded-lg w-full max-w-3xl p-0 backdrop:bg-slate-950/50">
-    <form id="modelForm" class="bg-white p-6 space-y-4">
-        <div class="flex items-start justify-between">
-            <h3 class="text-base font-semibold">Model</h3>
+<dialog id="modelDialog" class="app-modal" style="--modal-width: 820px">
+    <form id="modelForm" class="app-modal-panel">
+        <div class="app-modal-header">
+            <h3 class="app-modal-title">Model</h3>
             <button type="button" onclick="modelDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
         </div>
         <input id="modelId" type="hidden">
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="app-modal-body grid grid-cols-1 md:grid-cols-2 gap-4">
             <label class="space-y-1">
                 <span class="text-sm font-medium">Provider</span>
                 <select id="modelProvider"></select>
@@ -127,7 +129,7 @@
                 <textarea id="modelNotes" rows="3" class="w-full border px-3 py-2"></textarea>
             </label>
         </div>
-        <div class="flex justify-end gap-2 pt-2">
+        <div class="app-modal-footer">
             <button type="button" onclick="modelDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
             <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Kaydet</button>
         </div>
@@ -142,6 +144,9 @@ let models = [];
 let usage = {};
 
 async function loadAll() {
+    providerList.innerHTML = skeletonCards(3);
+    modelList.innerHTML = skeletonCards(4);
+    usageList.innerHTML = skeletonCards(3);
     const [providerRes, modelRes, usageRes] = await Promise.all([
         api('/api/llm/providers'),
         api('/api/llm/models'),

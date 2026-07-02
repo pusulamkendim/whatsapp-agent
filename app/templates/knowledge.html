@@ -29,33 +29,35 @@
     </section>
 </div>
 
-<dialog id="baseDialog" class="rounded-lg w-full max-w-xl p-0 backdrop:bg-slate-950/50">
-    <form id="baseForm" class="bg-white p-6 space-y-4">
-        <div class="flex items-start justify-between">
-            <h3 class="text-base font-semibold">Yeni bilgi bankasi</h3>
+<dialog id="baseDialog" class="app-modal" style="--modal-width: 640px">
+    <form id="baseForm" class="app-modal-panel">
+        <div class="app-modal-header">
+            <h3 class="app-modal-title">Yeni bilgi bankasi</h3>
             <button type="button" onclick="baseDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
         </div>
-        <p id="baseFormError" class="hidden rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700"></p>
-        <label class="space-y-1 block">
-            <span class="text-sm font-medium">Ad</span>
-            <input id="baseName" class="w-full border px-3 py-2" placeholder="Retreat Knowledge">
-        </label>
-        <label class="space-y-1 block">
-            <span class="text-sm font-medium">Aciklama</span>
-            <textarea id="baseDescription" rows="3" class="w-full border px-3 py-2" placeholder="Bu bilgi bankasi hangi icerikleri tasir?"></textarea>
-        </label>
-        <label class="space-y-1 block">
-            <span class="text-sm font-medium">Dokumanlar</span>
-            <span class="flex items-center justify-between gap-3 border border-dashed border-slate-300 rounded-2xl px-4 py-4 cursor-pointer hover:bg-slate-50">
-                <span class="min-w-0">
-                    <span class="block font-medium">Dosya sec</span>
-                    <span id="baseFileSummary" class="block text-xs text-slate-500 mt-1 truncate">txt, md, csv, json · birden fazla dosya</span>
+        <div class="app-modal-body space-y-4">
+            <p id="baseFormError" class="hidden rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+            <label class="space-y-1 block">
+                <span class="text-sm font-medium">Ad</span>
+                <input id="baseName" class="w-full border px-3 py-2" placeholder="Retreat Knowledge">
+            </label>
+            <label class="space-y-1 block">
+                <span class="text-sm font-medium">Aciklama</span>
+                <textarea id="baseDescription" rows="3" class="w-full border px-3 py-2" placeholder="Bu bilgi bankasi hangi icerikleri tasir?"></textarea>
+            </label>
+            <label class="space-y-1 block">
+                <span class="text-sm font-medium">Dokumanlar</span>
+                <span class="flex items-center justify-between gap-3 border border-dashed border-slate-300 rounded-2xl px-4 py-4 cursor-pointer hover:bg-slate-50">
+                    <span class="min-w-0">
+                        <span class="block font-medium">Dosya sec</span>
+                        <span id="baseFileSummary" class="block text-xs text-slate-500 mt-1 truncate">txt, md, csv, json · birden fazla dosya</span>
+                    </span>
+                    <i data-lucide="upload" class="w-5 h-5 text-slate-500"></i>
+                    <input id="baseFiles" type="file" multiple class="hidden" accept=".txt,.md,.markdown,.csv,.json" onchange="showBaseSelectedFiles()">
                 </span>
-                <i data-lucide="upload" class="w-5 h-5 text-slate-500"></i>
-                <input id="baseFiles" type="file" multiple class="hidden" accept=".txt,.md,.markdown,.csv,.json" onchange="showBaseSelectedFiles()">
-            </span>
-        </label>
-        <div class="flex justify-end gap-2 pt-2">
+            </label>
+        </div>
+        <div class="app-modal-footer">
             <button type="button" onclick="baseDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
             <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Olustur</button>
         </div>
@@ -256,15 +258,17 @@ async function loadDetail(id) {
             </div>
             <div class="border border-slate-200 rounded-2xl overflow-hidden">
                 ${documents.length ? documents.map(doc => `
-                    <div class="grid grid-cols-[minmax(0,1fr)_110px_110px_96px_40px] gap-3 items-center px-4 py-2.5 border-b border-slate-100 last:border-b-0">
+                    <div class="kb-document-row px-4 py-2.5 border-b border-slate-100 last:border-b-0">
                         <div class="min-w-0">
                             <div class="font-medium truncate">${escapeHtml(doc.filename)}</div>
                             <p class="text-xs text-slate-500 mt-0.5 truncate">${escapeHtml(doc.preview)}</p>
                         </div>
-                        <span class="text-xs text-slate-500 truncate">${escapeHtml(doc.content_type || 'text/plain')}</span>
-                        <span class="text-xs text-slate-500 whitespace-nowrap">${formatCount(doc.character_count, 'karakter')}</span>
-                        <span class="text-xs text-slate-500 whitespace-nowrap">${new Date(doc.created_at).toLocaleDateString('tr-TR')}</span>
-                        <span class="flex justify-end">
+                        <span class="kb-document-meta text-xs text-slate-500">
+                            <span class="truncate">${escapeHtml(doc.content_type || 'text/plain')}</span>
+                            <span class="whitespace-nowrap">${formatCount(doc.character_count, 'karakter')}</span>
+                            <span class="whitespace-nowrap">${new Date(doc.created_at).toLocaleDateString('tr-TR')}</span>
+                        </span>
+                        <span class="kb-document-action flex justify-end">
                             <button onclick="deleteDocument(${doc.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
                         </span>
                     </div>

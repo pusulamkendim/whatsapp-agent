@@ -10,7 +10,7 @@
     <button onclick="openChannelForm()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni kanal</button>
 </div>
 
-<div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+<div class="bg-white border border-slate-200 rounded-lg overflow-hidden responsive-table">
     <table class="w-full text-sm">
         <thead class="bg-slate-50 text-slate-600">
             <tr>
@@ -25,17 +25,17 @@
     </table>
 </div>
 
-<dialog id="channelDialog" class="rounded-lg w-full max-w-2xl p-0 backdrop:bg-slate-950/50">
-    <form id="channelForm" class="bg-white p-6 space-y-4">
-        <div class="flex items-start justify-between">
+<dialog id="channelDialog" class="app-modal" style="--modal-width: 720px">
+    <form id="channelForm" class="app-modal-panel">
+        <div class="app-modal-header">
             <div>
-                <h3 id="formTitle" class="text-base font-semibold">Kanal</h3>
+                <h3 id="formTitle" class="app-modal-title">Kanal</h3>
                 <p class="text-sm text-slate-500">Credential alanini bos birakirsan mevcut deger korunur.</p>
             </div>
             <button type="button" onclick="channelDialog.close()" class="icon-btn" title="Kapat" aria-label="Kapat"><i data-lucide="x"></i></button>
         </div>
         <input id="channelId" type="hidden">
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="app-modal-body grid grid-cols-1 md:grid-cols-2 gap-4">
             <label class="space-y-1">
                 <span class="text-sm font-medium">Tip</span>
                 <select id="channelType" class="w-full border rounded-md px-3 py-2" data-icon="radio-tower">
@@ -69,7 +69,7 @@
                 <input id="credentialsJson" class="w-full border rounded-md px-3 py-2 font-mono text-sm" placeholder='{"access_token_env":"WHATSAPP_ACCESS_TOKEN"}'>
             </label>
         </div>
-        <div class="flex justify-end gap-2 pt-2">
+        <div class="app-modal-footer">
             <button type="button" onclick="channelDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
             <button class="btn-primary btn-icon px-4 py-2"><i data-lucide="save"></i>Kaydet</button>
         </div>
@@ -82,6 +82,7 @@
 let channels = [];
 
 async function loadChannels() {
+    channelsBody.innerHTML = '<tr><td colspan="5" class="p-3"><div class="skeleton-card"></div></td></tr>';
     const res = await api('/api/channels');
     channels = await res.json();
     channelsBody.innerHTML = channels.map(c => `

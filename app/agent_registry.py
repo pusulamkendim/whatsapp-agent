@@ -91,7 +91,8 @@ def _log_llm_usage(
 ):
     provider = parse_model_ref(model_ref)[0]
     usage = usage or {}
-    estimated_cost = _estimate_llm_cost(db, model_ref, usage)
+    actual_cost = usage.get("actual_cost")
+    estimated_cost = actual_cost if actual_cost is not None else _estimate_llm_cost(db, model_ref, usage)
     try:
         db.add(LlmUsageLog(
             agent_id=agent.id,
@@ -101,6 +102,12 @@ def _log_llm_usage(
             completion_tokens=usage.get("completion_tokens"),
             total_tokens=usage.get("total_tokens"),
             estimated_cost=estimated_cost,
+            actual_cost=actual_cost,
+            generation_id=usage.get("generation_id") or "",
+            actual_model_ref=usage.get("actual_model_ref") or "",
+            actual_provider=usage.get("actual_provider") or "",
+            router=usage.get("router") or "",
+            cost_details_json=usage.get("cost_details_json") or "",
             latency_ms=latency_ms,
             success=success,
             error_code=type(error).__name__ if error else "",

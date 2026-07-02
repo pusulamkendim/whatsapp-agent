@@ -274,12 +274,14 @@ function renderUsage() {
                 <div>
                     <div class="font-medium">${escapeHtml(log.agent_slug || 'agent yok')}</div>
                     <div class="text-xs text-slate-500 font-mono">${escapeHtml(log.model_ref)}</div>
+                    ${log.actual_model_ref ? `<div class="mt-1 text-xs text-blue-700 font-mono">${escapeHtml(log.actual_provider || 'routed')} -> ${escapeHtml(log.actual_model_ref)}</div>` : ''}
                     <div class="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
                         <span class="px-2 py-1 rounded bg-slate-100">in ${formatToken(log.prompt_tokens)}</span>
                         <span class="px-2 py-1 rounded bg-slate-100">out ${formatToken(log.completion_tokens)}</span>
                         <span class="px-2 py-1 rounded bg-slate-100">total ${formatToken(log.total_tokens)}</span>
-                        <span class="px-2 py-1 rounded bg-slate-100">${formatMoney(log.estimated_cost)}</span>
+                        <span class="px-2 py-1 rounded bg-slate-100">${formatMoney(log.estimated_cost)}${log.actual_cost !== null && log.actual_cost !== undefined ? ' actual' : ''}</span>
                         ${log.latency_ms ? `<span class="px-2 py-1 rounded bg-slate-100">${log.latency_ms} ms</span>` : ''}
+                        ${log.generation_id ? `<span class="px-2 py-1 rounded bg-slate-100 font-mono">${escapeHtml(log.generation_id)}</span>` : ''}
                     </div>
                     ${log.error_message ? `<div class="mt-1 text-xs text-rose-700">${escapeHtml(log.error_message).slice(0, 180)}</div>` : ''}
                 </div>

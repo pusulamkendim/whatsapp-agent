@@ -105,6 +105,12 @@ def summarize_llm_usage(events: list[dict]) -> dict:
         "prompt_tokens": _sum_usage(events, "prompt_tokens"),
         "completion_tokens": _sum_usage(events, "completion_tokens"),
         "total_tokens": _sum_usage(events, "total_tokens"),
+        "actual_cost": _sum_usage(events, "actual_cost"),
+        "generation_id": _join_unique(events, "generation_id"),
+        "actual_model_ref": _join_unique(events, "actual_model_ref"),
+        "actual_provider": _join_unique(events, "actual_provider"),
+        "router": _join_unique(events, "router"),
+        "cost_details_json": _join_unique(events, "cost_details_json", limit=4000),
     }
 
 
@@ -125,6 +131,12 @@ def record_llm_usage(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     total_tokens: int | None = None,
+    actual_cost: float | None = None,
+    generation_id: str | None = None,
+    actual_model_ref: str | None = None,
+    actual_provider: str | None = None,
+    router: str | None = None,
+    cost_details_json: str | None = None,
 ):
     events = _USAGE_EVENTS.get()
     if events is None:
@@ -134,12 +146,27 @@ def record_llm_usage(
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
+        "actual_cost": actual_cost,
+        "generation_id": generation_id,
+        "actual_model_ref": actual_model_ref,
+        "actual_provider": actual_provider,
+        "router": router,
+        "cost_details_json": cost_details_json,
     })
 
 
 def _sum_usage(events: list[dict], key: str) -> int | None:
     values = [event.get(key) for event in events if event.get(key) is not None]
     return sum(values) if values else None
+
+
+def _join_unique(events: list[dict], key: str, limit: int = 500) -> str:
+    values = []
+    for event in events:
+        value = event.get(key)
+        if value and value not in values:
+            values.append(str(value))
+    return " | ".join(values)[:limit]
 
 
 def openai_compatible_chat(
@@ -161,6 +188,8 @@ def openai_compatible_chat(
         payload["tool_choice"] = "auto"
 
     headers = {"Content-Type": "application/json", **extra_headers}
+    if provider == "openrouter":
+        headers["X-OpenRouter-Metadata"] = "enabled"
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -174,13 +203,34 @@ def openai_compatible_chat(
         raise RuntimeError(f"{provider}:{model} HTTP {response.status_code}: {detail}")
     data = response.json()
     usage = data.get("usage") or {}
+    openrouter_metadata = data.get("openrouter_metadata") or {}
+    selected_endpoint = _selected_openrouter_endpoint(openrouter_metadata)
+    cost_details = usage.get("cost_details") or {}
     record_llm_usage(
         model_ref=model_ref,
         prompt_tokens=usage.get("prompt_tokens"),
         completion_tokens=usage.get("completion_tokens"),
         total_tokens=usage.get("total_tokens"),
+        actual_cost=usage.get("cost"),
+        generation_id=data.get("id"),
+        actual_model_ref=data.get("model") if provider == "openrouter" else None,
+        actual_provider=selected_endpoint.get("provider") if selected_endpoint else None,
+        router=openrouter_metadata.get("requested") or (model if provider == "openrouter" else None),
+        cost_details_json=json.dumps(cost_details)[:4000] if cost_details else "",
     )
     return data["choices"][0]["message"]
+
+
+def _selected_openrouter_endpoint(metadata: dict) -> dict:
+    endpoints = ((metadata.get("endpoints") or {}).get("available") or [])
+    for endpoint in endpoints:
+        if endpoint.get("selected"):
+            return endpoint
+    attempts = metadata.get("attempts") or []
+    for attempt in reversed(attempts):
+        if attempt.get("status") == 200:
+            return attempt
+    return {}
 
 
 def _post_with_transient_retry(url: str, headers: dict, payload: dict) -> requests.Response:

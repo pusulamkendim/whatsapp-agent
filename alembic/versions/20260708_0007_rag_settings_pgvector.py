@@ -48,10 +48,16 @@ def upgrade():
             op.execute(f"ALTER TABLE rag_query_logs ADD COLUMN {column} {ddl}")
 
     if bind.dialect.name == "postgresql":
-        op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        embedding_columns = {column["name"] for column in inspector.get_columns("knowledge_embeddings")}
-        if "embedding_vector" not in embedding_columns:
-            op.execute("ALTER TABLE knowledge_embeddings ADD COLUMN embedding_vector vector")
+        vector_available = bind.execute(
+            sa.text("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")
+        ).scalar()
+        if vector_available:
+            op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            embedding_columns = {column["name"] for column in inspector.get_columns("knowledge_embeddings")}
+            if "embedding_vector" not in embedding_columns:
+                op.execute("ALTER TABLE knowledge_embeddings ADD COLUMN embedding_vector vector")
+        else:
+            print("pgvector extension is not available; vector_json fallback remains active.")
 
 
 def downgrade():

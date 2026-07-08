@@ -415,7 +415,7 @@ def _emit_progress(callback: ProgressCallback | None, step: str, message: str, m
 
 def run_ocr_pipeline(image_path: str, options: dict | None = None, progress_callback: ProgressCallback | None = None) -> dict:
     options = options or {}
-    engine = (options.get("engine") or os.getenv("IMAGE_OCR_ENGINE") or "auto").lower()
+    engine = _selected_ocr_engine(options)
     _emit_progress(progress_callback, "prepare", f"OCR hazırlandı. Motor: {engine}", {"engine": engine})
     image = Image.open(image_path).convert("RGB")
     _emit_progress(progress_callback, "detect", "Metin bölgeleri aranıyor.", {"engine": engine})
@@ -439,10 +439,15 @@ def run_ocr_pipeline(image_path: str, options: dict | None = None, progress_call
 
 def extract_text_boxes(image_path: str, options: dict | None = None, progress_callback: ProgressCallback | None = None) -> list[dict]:
     options = options or {}
-    engine = (options.get("engine") or os.getenv("IMAGE_OCR_ENGINE") or "auto").lower()
-    use_local = engine in {"auto", "local", "easyocr", "paddleocr"}
+    engine = _selected_ocr_engine(options)
+    local_enabled = _local_ocr_enabled()
+    use_local = local_enabled and engine in {"auto", "local", "easyocr", "paddleocr"}
     use_gemini = engine in {"auto", "gemini"}
     best_local: list[dict] = []
+
+    if engine in {"local", "easyocr", "paddleocr"} and not local_enabled:
+        _emit_progress(progress_callback, "local-ocr", "Yerel OCR bu ortamda kapalı; Gemini Vision kullanılacak.", {"engine": engine})
+        use_gemini = True
 
     if use_local:
         extractors = []
@@ -498,6 +503,23 @@ def extract_text_boxes(image_path: str, options: dict | None = None, progress_ca
         return best_local
     _emit_progress(progress_callback, "detect", "Metin kutusu bulunamadı.", {"count": 0})
     return []
+
+
+def _selected_ocr_engine(options: dict | None = None) -> str:
+    options = options or {}
+    engine = (options.get("engine") or os.getenv("IMAGE_OCR_ENGINE") or "auto").lower()
+    if engine not in {"auto", "gemini", "local", "easyocr", "paddleocr"}:
+        engine = "auto"
+    if not _local_ocr_enabled() and engine == "auto":
+        return "gemini"
+    return engine
+
+
+def _local_ocr_enabled() -> bool:
+    override = os.getenv("IMAGE_LOCAL_OCR_ENABLE")
+    if override is not None:
+        return override.lower() in {"1", "true", "yes", "on"}
+    return not bool(os.getenv("COOLIFY_RESOURCE_UUID") or os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT"))
 
 
 def _ocr_result_is_reliable(items: list[dict]) -> bool:

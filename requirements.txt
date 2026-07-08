@@ -11,5 +11,3 @@ requests
 alembic
 pillow
 numpy
-easyocr
-opencv-python-headless

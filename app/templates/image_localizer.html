@@ -408,10 +408,10 @@ function assetHtml(asset) {
                 </div>
                 <div class="grid grid-cols-1 gap-2 mb-3">
                     <select id="ocrEngine" class="border px-3 py-2 text-sm">
-                        <option value="auto">Auto: EasyOCR + Gemini düzeltme</option>
+                        <option value="auto">Auto: Gemini OCR</option>
                         <option value="gemini">Sadece Gemini Vision</option>
-                        <option value="easyocr">Sadece EasyOCR</option>
-                        <option value="local">Yerel OCR</option>
+                        <option value="easyocr">EasyOCR (lokal)</option>
+                        <option value="local">Yerel OCR (lokal)</option>
                     </select>
                     <select id="ocrModel" class="border px-3 py-2 text-sm">
                         ${geminiModels.map(model => `<option value="${model.value}">${model.label} OCR</option>`).join('')}

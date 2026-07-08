@@ -86,6 +86,27 @@ MODEL_OPTIONS = [
         "env": "OLLAMA_BASE_URL",
         "notes": "Local/free if Ollama is running",
     },
+    {
+        "provider": "cerebras",
+        "label": "Cerebras GPT OSS 120B",
+        "model": "cerebras:gpt-oss-120b",
+        "env": "CEREBRAS_API_KEY",
+        "notes": "Fast public Cerebras reasoning model; 131K context; tools/json supported",
+    },
+    {
+        "provider": "cerebras",
+        "label": "Cerebras Gemma 4 31B",
+        "model": "cerebras:gemma-4-31b",
+        "env": "CEREBRAS_API_KEY",
+        "notes": "Fast public Cerebras multimodal model; vision/tools/json supported",
+    },
+    {
+        "provider": "cerebras",
+        "label": "Cerebras Z.ai GLM 4.7",
+        "model": "cerebras:zai-glm-4.7",
+        "env": "CEREBRAS_API_KEY",
+        "notes": "Preview agentic coding/tool model; reasoning is disabled by default for chat responses",
+    },
 ]
 
 
@@ -210,6 +231,7 @@ def openai_compatible_chat(
         "temperature": temperature,
         "stream": False,
     }
+    payload.update(_provider_payload_overrides(provider, model))
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -246,6 +268,12 @@ def openai_compatible_chat(
         cost_details_json=json.dumps(cost_details)[:4000] if cost_details else "",
     )
     return data["choices"][0]["message"]
+
+
+def _provider_payload_overrides(provider: str, model: str) -> dict:
+    if provider == "cerebras" and model == "zai-glm-4.7":
+        return {"reasoning_effort": "none"}
+    return {}
 
 
 def _selected_openrouter_endpoint(metadata: dict) -> dict:
@@ -409,6 +437,13 @@ def _openai_compatible_config(provider: str) -> tuple[str, str, dict]:
             os.getenv("OPENAI_BASE_URL", base_url),
             os.getenv(api_key_env, ""),
             {},
+        )
+    if provider == "cerebras":
+        base_url, api_key_env = db_config or ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY")
+        return (
+            os.getenv("CEREBRAS_BASE_URL", base_url),
+            os.getenv(api_key_env, ""),
+            {"User-Agent": "AgentLense/1.0"},
         )
     if db_config:
         base_url, api_key_env = db_config

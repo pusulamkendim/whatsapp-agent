@@ -293,6 +293,11 @@ def _seed_llm_catalog():
             "base_url": "https://api.openai.com/v1",
             "api_key_env": "OPENAI_API_KEY",
         },
+        "cerebras": {
+            "name": "Cerebras",
+            "base_url": "https://api.cerebras.ai/v1",
+            "api_key_env": "CEREBRAS_API_KEY",
+        },
     }
 
     db = SessionLocal()
@@ -320,8 +325,8 @@ def _seed_llm_catalog():
                         slug=option["model"].split(":", 1)[1],
                         display_name=option["label"],
                         model_ref=option["model"],
-                        supports_tools=provider_slug in {"gemini", "openrouter", "deepseek", "openai", "ollama"},
-                        supports_vision=provider_slug in {"gemini", "openrouter", "openai"},
+                        supports_tools=provider_slug in {"gemini", "openrouter", "deepseek", "openai", "ollama", "cerebras"},
+                        supports_vision=provider_slug in {"gemini", "openrouter", "openai"} or option["model"] == "cerebras:gemma-4-31b",
                         is_default=option["model"] == "gemini:gemini-2.5-flash",
                         notes=option.get("notes", ""),
                         active=True,

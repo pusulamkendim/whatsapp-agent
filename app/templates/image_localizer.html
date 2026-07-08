@@ -1,0 +1,683 @@
+{% extends "base.html" %}
+{% block title %}Image Localizer{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between gap-4 mb-4">
+    <div>
+        <h2 class="text-xl font-semibold text-slate-900">Image Localizer</h2>
+        <p class="text-slate-500 mt-0.5">Ekran goruntusunden post gorselini ayikla, metni Turkcelestir, temiz cikti olustur.</p>
+    </div>
+</div>
+
+<section class="grid grid-cols-1 xl:grid-cols-[360px_minmax(0,1fr)] gap-4">
+    <aside class="bg-white border border-slate-200 rounded-2xl p-4 h-fit">
+        <form id="uploadForm" class="space-y-4">
+            <label class="space-y-2 block">
+                <span class="text-sm font-medium">Gorsel linki</span>
+                <div class="relative">
+                    <i data-lucide="link" class="absolute left-3 top-3 w-4 h-4 text-slate-400"></i>
+                    <input id="imageUrl" class="w-full border pl-9 pr-3 py-2" placeholder="https://www.instagram.com/p/... veya direkt gorsel URL">
+                </div>
+                <span class="block text-xs text-slate-500">Instagram linklerinde post sayfasindaki onizleme gorseli otomatik cozulmeye calisilir.</span>
+            </label>
+            <div class="flex items-center gap-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                <span class="h-px flex-1 bg-slate-200"></span>
+                veya
+                <span class="h-px flex-1 bg-slate-200"></span>
+            </div>
+            <label class="space-y-2 block">
+                <span class="text-sm font-medium">Gorseller</span>
+                <span class="flex items-center justify-between gap-3 border border-dashed border-slate-300 rounded-2xl px-4 py-5 cursor-pointer hover:bg-slate-50">
+                    <span class="min-w-0">
+                        <span class="block font-medium">Dosya sec</span>
+                        <span id="fileSummary" class="block text-xs text-slate-500 mt-1 truncate">png, jpg, webp · birden fazla</span>
+                    </span>
+                    <i data-lucide="upload" class="w-5 h-5 text-slate-500"></i>
+                    <input id="imageFiles" type="file" multiple class="hidden" accept="image/png,image/jpeg,image/webp">
+                </span>
+            </label>
+            <button id="uploadButton" class="btn-primary btn-icon px-4 py-2 w-full justify-center" type="submit"><i data-lucide="upload"></i><span class="button-label">Yukle</span></button>
+            <div id="uploadProgress" class="hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <div class="flex items-center justify-between gap-3 mb-2">
+                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Islem akisi</div>
+                    <span id="uploadProgressState" class="text-xs text-slate-500"></span>
+                </div>
+                <div id="uploadProgressSteps" class="space-y-2"></div>
+            </div>
+            <div id="uploadNotice" class="hidden rounded-2xl border border-dashed border-slate-300 bg-white px-3 py-2 text-sm text-slate-600"></div>
+        </form>
+
+        <div class="border-t border-slate-200 mt-5 pt-4">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Son isler</div>
+            <div id="jobList" class="space-y-1"></div>
+        </div>
+    </aside>
+
+    <section id="jobDetail" class="bg-white border border-slate-200 rounded-2xl p-4 min-h-[520px]">
+        <div class="h-full min-h-[480px] grid place-items-center text-center text-slate-500">
+            <div>
+                <i data-lucide="image-plus" class="w-8 h-8 mx-auto mb-3 text-slate-400"></i>
+                <p>Gorsel yukleyerek basla.</p>
+            </div>
+        </div>
+    </section>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let jobs = [];
+let currentJob = null;
+let selectedAssetId = null;
+let uploadProgressTimers = [];
+let uploadBusy = false;
+let ocrProgressTimer = null;
+const geminiModels = [
+    {value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash'},
+    {value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro'},
+    {value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash'},
+    {value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash'}
+];
+
+function setUploadProgressVisible(visible) {
+    uploadProgress.classList.toggle('hidden', !visible);
+}
+
+function clearUploadProgressTimers() {
+    uploadProgressTimers.forEach(timer => clearTimeout(timer));
+    uploadProgressTimers = [];
+}
+
+function renderUploadProgress(steps, activeIndex, stateText) {
+    uploadProgressSteps.innerHTML = steps.map((step, index) => {
+        const isDone = index < activeIndex;
+        const isActive = index === activeIndex;
+        const icon = isDone ? 'check-circle-2' : isActive ? 'loader-circle' : 'circle';
+        const rowClass = isDone ? 'text-emerald-700' : isActive ? 'text-blue-700' : 'text-slate-400';
+        const badgeClass = isDone ? 'bg-emerald-100 text-emerald-700' : isActive ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500';
+        return `
+            <div class="flex items-start gap-2 ${rowClass}">
+                <i data-lucide="${icon}" class="w-4 h-4 mt-0.5 shrink-0 ${isActive ? 'animate-spin' : ''}"></i>
+                <div class="min-w-0 flex-1">
+                    <div class="text-sm font-medium">${escapeHtml(step)}</div>
+                    <div class="mt-0.5 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${badgeClass}">
+                        ${index < activeIndex ? 'tamamlandı' : isActive ? 'işleniyor' : 'bekliyor'}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    uploadProgressState.textContent = stateText || '';
+    setUploadProgressVisible(true);
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function hideUploadProgress() {
+    clearUploadProgressTimers();
+    setUploadProgressVisible(false);
+    uploadProgressSteps.innerHTML = '';
+    uploadProgressState.textContent = '';
+}
+
+function setUploadNotice(message, variant = 'info') {
+    uploadNotice.textContent = message || '';
+    uploadNotice.className = 'rounded-2xl border px-3 py-2 text-sm';
+    uploadNotice.classList.toggle('hidden', !message);
+    uploadNotice.classList.toggle('border-slate-300', variant === 'info');
+    uploadNotice.classList.toggle('bg-slate-50', variant === 'info');
+    uploadNotice.classList.toggle('text-slate-600', variant === 'info');
+    uploadNotice.classList.toggle('border-rose-300', variant === 'error');
+    uploadNotice.classList.toggle('bg-rose-50', variant === 'error');
+    uploadNotice.classList.toggle('text-rose-700', variant === 'error');
+    uploadNotice.classList.toggle('border-emerald-300', variant === 'success');
+    uploadNotice.classList.toggle('bg-emerald-50', variant === 'success');
+    uploadNotice.classList.toggle('text-emerald-700', variant === 'success');
+}
+
+function scheduleUploadProgress(steps) {
+    clearUploadProgressTimers();
+    renderUploadProgress(steps, 0, 'başlıyor');
+    steps.slice(1).forEach((_, index) => {
+        uploadProgressTimers.push(setTimeout(() => {
+            renderUploadProgress(steps, index + 1, index + 1 === steps.length - 1 ? 'sonuç hazırlanıyor' : 'işleniyor');
+        }, 650 * (index + 1)));
+    });
+}
+
+function stopOcrProgressPolling() {
+    if (ocrProgressTimer) clearInterval(ocrProgressTimer);
+    ocrProgressTimer = null;
+}
+
+function renderOcrProgress(progress, fallbackOptions = null) {
+    const container = document.getElementById('ocrProgress');
+    if (!container) return;
+    const history = progress?.history?.length ? progress.history : [{
+        step: progress?.step || 'queued',
+        message: progress?.message || 'OCR hazırlanıyor.',
+        meta: progress?.meta || fallbackOptions || {},
+        updated_at: progress?.updated_at || ''
+    }];
+    const status = progress?.status || 'running';
+    const currentStep = progress?.step || history[history.length - 1]?.step || '';
+    const meta = progress?.meta || fallbackOptions || {};
+    const modelInfo = [
+        meta.engine ? `Motor: ${meta.engine}` : '',
+        meta.model ? `Model: ${meta.model}` : '',
+        meta.ocr_model ? `OCR: ${meta.ocr_model}` : '',
+        meta.translation_model ? `Çeviri: ${meta.translation_model}` : '',
+        meta.count !== undefined ? `Kutu: ${meta.count}` : '',
+        meta.quality !== undefined ? `Kalite: ${meta.quality}` : ''
+    ].filter(Boolean).join(' · ');
+    container.classList.remove('hidden');
+    container.innerHTML = `
+        <div class="flex items-center justify-between gap-3 mb-2">
+            <div>
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">OCR akışı</div>
+                ${modelInfo ? `<div class="text-xs text-slate-500 mt-0.5">${escapeHtml(modelInfo)}</div>` : ''}
+            </div>
+            <span class="text-xs px-2 py-1 rounded-full ${status === 'complete' ? 'bg-emerald-50 text-emerald-700' : status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-blue-50 text-blue-700'}">${escapeHtml(status)}</span>
+        </div>
+        <div class="space-y-2">
+            ${history.map((item, index) => {
+                const active = item.step === currentStep && status === 'running';
+                const done = status === 'complete' || index < history.length - 1;
+                const icon = status === 'failed' && index === history.length - 1 ? 'x-circle' : active ? 'loader-circle' : done ? 'check-circle-2' : 'circle';
+                const rowClass = status === 'failed' && index === history.length - 1 ? 'text-rose-700' : active ? 'text-blue-700' : done ? 'text-emerald-700' : 'text-slate-500';
+                return `
+                    <div class="flex items-start gap-2 ${rowClass}">
+                        <i data-lucide="${icon}" class="w-4 h-4 mt-0.5 shrink-0 ${active ? 'animate-spin' : ''}"></i>
+                        <div class="min-w-0">
+                            <div class="text-sm font-medium">${escapeHtml(item.message || item.step || '')}</div>
+                            ${item.meta?.model || item.meta?.engine || item.meta?.count !== undefined ? `<div class="text-xs text-slate-500 mt-0.5">${escapeHtml([
+                                item.meta?.engine ? `motor ${item.meta.engine}` : '',
+                                item.meta?.model ? `model ${item.meta.model}` : '',
+                                item.meta?.count !== undefined ? `${item.meta.count} kutu` : '',
+                                item.meta?.quality !== undefined ? `kalite ${item.meta.quality}` : ''
+                            ].filter(Boolean).join(' · '))}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function startOcrProgressPolling(jobId, assetId, fallbackOptions) {
+    stopOcrProgressPolling();
+    renderOcrProgress({
+        status: 'running',
+        step: 'queued',
+        message: 'OCR isteği gönderiliyor.',
+        meta: fallbackOptions,
+        history: [{step: 'queued', message: 'OCR isteği gönderiliyor.', meta: fallbackOptions}]
+    }, fallbackOptions);
+    ocrProgressTimer = setInterval(async () => {
+        const res = await api(`/api/image-localization/jobs/${jobId}/assets/${assetId}/ocr-progress`, {toast: false});
+        if (!res.ok) return;
+        const progress = await res.json();
+        renderOcrProgress(progress, fallbackOptions);
+        if (progress.status === 'complete' || progress.status === 'failed') {
+            stopOcrProgressPolling();
+        }
+    }, 700);
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+
+function statusBadge(status) {
+    const styles = {
+        complete: 'bg-emerald-50 text-emerald-700',
+        failed: 'bg-rose-50 text-rose-700',
+        generating: 'bg-blue-50 text-blue-700',
+        approved: 'bg-amber-50 text-amber-700',
+        needs_review: 'bg-amber-50 text-amber-700',
+        processing: 'bg-blue-50 text-blue-700',
+        uploaded: 'bg-slate-100 text-slate-600'
+    };
+    return `<span class="text-xs px-2 py-1 rounded-full ${styles[status] || 'bg-slate-100 text-slate-600'}">${escapeHtml(status)}</span>`;
+}
+
+imageFiles.addEventListener('change', () => {
+    const names = Array.from(imageFiles.files || []).map(file => file.name);
+    fileSummary.textContent = names.length ? names.join(', ') : 'png, jpg, webp · birden fazla';
+});
+
+uploadForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (uploadBusy) return;
+    uploadBusy = true;
+    const url = imageUrl.value.trim();
+    if (!imageFiles.files.length && !url) {
+        showToast('Bir gorsel sec veya link yapistir.', {variant: 'warning'});
+        uploadBusy = false;
+        return;
+    }
+    const steps = url
+        ? ['Girdi alındı', 'Instagram sayfası çözümleniyor', 'Görseller indiriliyor', 'Kayıt hazırlanıyor', 'Tamamlandı']
+        : ['Girdi alındı', 'Dosyalar okunuyor', 'Görseller kaydediliyor', 'Kayıt hazırlanıyor', 'Tamamlandı'];
+    const formData = new FormData();
+    Array.from(imageFiles.files).forEach(file => formData.append('files', file));
+    if (url) formData.append('urls', url);
+    const submitButton = uploadForm.querySelector('button[type="submit"]');
+    const buttonLabel = submitButton.querySelector('.button-label');
+    submitButton.disabled = true;
+    if (buttonLabel) buttonLabel.textContent = 'Yukleniyor...';
+    setUploadNotice(url ? 'Instagram linki cozuluyor.' : 'Dosyalar yukleniyor.', 'info');
+    jobDetail.innerHTML = skeletonCards(3);
+    scheduleUploadProgress(steps);
+    try {
+        const res = await api('/api/image-localization/jobs', {method: 'POST', body: formData});
+        clearUploadProgressTimers();
+        if (!res.ok) {
+            renderUploadProgress(steps, 0, url ? 'Instagram link çözümlenemedi' : 'yükleme başarısız');
+            setUploadNotice(url ? 'Instagram linki çözümlenemedi. Link herkese açık olmayabilir veya post erişime kapalı olabilir.' : 'Yükleme başarısız.', 'error');
+            return;
+        }
+        renderUploadProgress(steps, steps.length, 'tamamlandı');
+        const data = await res.json();
+        currentJob = data.job;
+        selectedAssetId = currentJob.assets?.[0]?.id || null;
+        imageFiles.value = '';
+        imageUrl.value = '';
+        fileSummary.textContent = 'png, jpg, webp · birden fazla';
+        await loadJobs();
+        renderJob();
+        setUploadNotice(`Yükleme tamamlandı. ${currentJob.asset_count || 0} görsel işlendi.`, 'success');
+        showToast('Gorseller yuklendi. OCR her gorsel icin manuel calistirilabilir.', {variant: 'success'});
+        window.setTimeout(() => hideUploadProgress(), 1200);
+    } catch (error) {
+        clearUploadProgressTimers();
+        renderUploadProgress(steps, 0, 'hata oluştu');
+        setUploadNotice(error?.message ? `Yükleme hatası: ${error.message}` : 'Yükleme hatası.', 'error');
+        showToast(error?.message || 'Yukleme sirasinda hata olustu.', {variant: 'error'});
+    } finally {
+        submitButton.disabled = false;
+        if (buttonLabel) buttonLabel.textContent = 'Yukle';
+        uploadBusy = false;
+    }
+});
+
+async function loadJobs() {
+    const res = await api('/api/image-localization/jobs', {toast: false});
+    if (!res.ok) return;
+    jobs = await res.json();
+    renderJobList();
+}
+
+function renderJobList() {
+    if (!jobs.length) {
+        jobList.innerHTML = '<div class="text-sm text-slate-500">Henuz is yok.</div>';
+        return;
+    }
+    jobList.innerHTML = jobs.map(job => `
+        <button onclick="openJob(${job.id})" class="w-full text-left px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 ${currentJob?.id === job.id ? 'bg-slate-50' : 'bg-white'}">
+            <div class="flex items-center justify-between gap-2">
+                <span class="font-medium">#${job.id}</span>
+                ${statusBadge(job.status)}
+            </div>
+            <div class="text-xs text-slate-500 mt-1">${job.asset_count || 0} gorsel</div>
+        </button>
+    `).join('');
+    if (window.lucide) window.lucide.createIcons();
+}
+
+async function openJob(id) {
+    jobDetail.innerHTML = skeletonCards(3);
+    const res = await api(`/api/image-localization/jobs/${id}`);
+    if (!res.ok) return;
+    currentJob = await res.json();
+    selectedAssetId = currentJob.assets?.[0]?.id || null;
+    renderJobList();
+    renderJob();
+}
+
+function renderJob() {
+    if (!currentJob) return;
+    const assets = currentJob.assets || [];
+    const selected = assets.find(asset => asset.id === selectedAssetId) || assets[0];
+    selectedAssetId = selected?.id || null;
+    jobDetail.innerHTML = `
+        <div class="flex items-start justify-between gap-3 border-b border-slate-200 pb-4">
+            <div>
+                <div class="flex items-center gap-2">
+                    <h3 class="text-lg font-semibold">Is #${currentJob.id}</h3>
+                    ${statusBadge(currentJob.status)}
+                </div>
+                <p class="text-sm text-slate-500 mt-1">Metinleri kontrol et, gerekirse kutu ekle, sonra cikti uret.</p>
+            </div>
+            <button onclick="generateJob()" class="btn-secondary btn-icon px-4 py-2"><i data-lucide="images"></i>Tumunu uret</button>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-[180px_minmax(0,1fr)] gap-4 mt-4">
+            <aside class="space-y-2">
+                ${assets.map(asset => `
+                    <button onclick="selectAsset(${asset.id})" class="w-full text-left border border-slate-200 rounded-xl px-3 py-2 ${asset.id === selectedAssetId ? 'bg-slate-50' : 'bg-white hover:bg-slate-50'}">
+                        <div class="font-medium truncate">${escapeHtml(asset.filename)}</div>
+                        <div class="mt-1">${statusBadge(asset.status)}</div>
+                    </button>
+                `).join('')}
+            </aside>
+            <div id="assetPanel">${selected ? assetHtml(selected) : emptyState('Gorsel yok.', 'image')}</div>
+        </div>
+    `;
+    if (window.lucide) window.lucide.createIcons();
+    window.setTimeout(syncOverlayFromRows, 50);
+}
+
+function assetHtml(asset) {
+    if (asset.status === 'failed') {
+        return errorState(asset.error_message || 'Gorsel islenemedi.');
+    }
+    const texts = asset.approved_texts?.length ? asset.approved_texts : asset.translations || [];
+    return `
+        <div class="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_420px] gap-4">
+            <div class="space-y-3">
+                <div class="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                    <div class="text-xs font-semibold text-slate-500 mb-2">Orijinal gorsel</div>
+                    ${asset.original_url ? `
+                        <div id="imageEditor" class="max-w-full bg-white rounded-xl border border-slate-200 select-none">
+                            <div class="relative inline-block w-full">
+                                <img id="editorImage" src="${asset.original_url}" class="block w-full h-auto max-w-full max-h-none" onload="syncOverlayFromRows()">
+                                <div id="boxOverlay" class="absolute inset-0"></div>
+                            </div>
+                        </div>
+                        <div class="text-xs text-slate-500 mt-2">Kutulari gorsel uzerinde surukle; sag alt koseden boyutlandir.</div>
+                    ` : ''}
+                </div>
+                ${asset.output_url ? `
+                    <div class="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                        <div class="flex items-center justify-between gap-3 mb-2">
+                            <div class="text-xs font-semibold text-slate-500">Cikti</div>
+                            <a href="${asset.output_url}" class="btn-secondary btn-icon px-3 py-1.5" download><i data-lucide="download"></i>Indir</a>
+                        </div>
+                        <img src="${asset.output_url}" class="block w-full h-auto max-w-full max-h-none bg-white rounded-xl border border-slate-200">
+                    </div>
+                ` : ''}
+            </div>
+            <div>
+                <div class="flex items-center justify-between gap-3 mb-2">
+                    <div class="text-sm font-semibold">Metin kutulari</div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="runOcr()" class="btn-secondary btn-icon px-3 py-1.5"><i data-lucide="scan-text"></i>OCR calistir</button>
+                        <button onclick="addTextRow()" class="btn-secondary btn-icon px-3 py-1.5"><i data-lucide="plus"></i>Ekle</button>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 gap-2 mb-3">
+                    <select id="ocrEngine" class="border px-3 py-2 text-sm">
+                        <option value="auto">Auto: EasyOCR + Gemini düzeltme</option>
+                        <option value="gemini">Sadece Gemini Vision</option>
+                        <option value="easyocr">Sadece EasyOCR</option>
+                        <option value="local">Yerel OCR</option>
+                    </select>
+                    <select id="ocrModel" class="border px-3 py-2 text-sm">
+                        ${geminiModels.map(model => `<option value="${model.value}">${model.label} OCR</option>`).join('')}
+                    </select>
+                    <select id="translationModel" class="border px-3 py-2 text-sm">
+                        ${geminiModels.map(model => `<option value="${model.value}">${model.label} çeviri</option>`).join('')}
+                    </select>
+                </div>
+                <div id="ocrProgress" class="hidden rounded-2xl border border-slate-200 bg-slate-50 p-3 mb-3"></div>
+                <div id="textRows" class="space-y-3">${texts.map(textRowHtml).join('') || '<div class="text-sm text-slate-500">OCR metin bulamadi. Manuel kutu ekle.</div>'}</div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-4">
+                    <button onclick="saveTexts()" class="btn-secondary btn-icon px-4 py-2 justify-center"><i data-lucide="save"></i>Kaydet</button>
+                    <button onclick="generateAsset()" class="btn-primary btn-icon px-4 py-2 justify-center"><i data-lucide="image-down"></i>Bu gorseli uret</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function textRowHtml(item = {}) {
+    const id = item.id || `text_${Date.now()}`;
+    const autoFit = item.auto_fit !== false;
+    return `
+        <div class="text-row border border-slate-200 rounded-2xl p-3" data-id="${escapeHtml(id)}">
+            <label class="block text-xs font-medium text-slate-500 mb-1">Kaynak</label>
+            <input class="source w-full border px-3 py-2 text-sm" value="${escapeHtml(item.source_text || '')}" oninput="autoFitRow(this.closest('.text-row'))">
+            <label class="block text-xs font-medium text-slate-500 mt-3 mb-1">Turkce</label>
+            <textarea class="translated w-full border px-3 py-2 text-sm" rows="3" oninput="autoFitRow(this.closest('.text-row'))">${escapeHtml(item.translated_text || '')}</textarea>
+            <div class="grid grid-cols-4 gap-2 mt-3">
+                <input class="x border px-2 py-1 text-sm" type="number" value="${Number(item.x || 0)}" title="x" oninput="markManual(this.closest('.text-row')); syncOverlayFromRows()">
+                <input class="y border px-2 py-1 text-sm" type="number" value="${Number(item.y || 0)}" title="y" oninput="markManual(this.closest('.text-row')); syncOverlayFromRows()">
+                <input class="w border px-2 py-1 text-sm" type="number" value="${Number(item.width || 260)}" title="width" oninput="markManual(this.closest('.text-row')); syncOverlayFromRows()">
+                <input class="h border px-2 py-1 text-sm" type="number" value="${Number(item.height || 90)}" title="height" oninput="markManual(this.closest('.text-row')); syncOverlayFromRows()">
+            </div>
+            <div class="flex items-center justify-between gap-2 mt-3">
+                <label class="flex items-center gap-2 text-xs text-slate-600">
+                    <input class="auto-fit" type="checkbox" ${autoFit ? 'checked' : ''} onchange="syncOverlayFromRows()">
+                    Oto
+                </label>
+                <select class="align border px-3 py-2 text-sm">
+                    <option value="center" ${(item.align || 'center') === 'center' ? 'selected' : ''}>Center</option>
+                    <option value="left" ${item.align === 'left' ? 'selected' : ''}>Left</option>
+                    <option value="right" ${item.align === 'right' ? 'selected' : ''}>Right</option>
+                </select>
+                <button type="button" onclick="this.closest('.text-row').remove(); syncOverlayFromRows()" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
+            </div>
+        </div>
+    `;
+}
+
+function selectAsset(id) {
+    selectedAssetId = id;
+    renderJob();
+    window.setTimeout(syncOverlayFromRows, 50);
+}
+
+function addTextRow() {
+    const container = document.getElementById('textRows');
+    if (!container) return;
+    if (container.textContent.includes('OCR metin bulamadi')) container.innerHTML = '';
+    container.insertAdjacentHTML('beforeend', textRowHtml({x: 80, y: 80, width: 360, height: 120, align: 'center', auto_fit: false}));
+    syncOverlayFromRows();
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function markManual(row) {
+    const toggle = row?.querySelector('.auto-fit');
+    if (toggle) toggle.checked = false;
+}
+
+function autoFitRow(row) {
+    syncOverlayFromRows();
+}
+
+function collectTexts() {
+    return Array.from(document.querySelectorAll('.text-row')).map(row => ({
+        id: row.dataset.id,
+        source_text: row.querySelector('.source').value,
+        translated_text: row.querySelector('.translated').value,
+        x: Number(row.querySelector('.x').value),
+        y: Number(row.querySelector('.y').value),
+        width: Number(row.querySelector('.w').value),
+        height: Number(row.querySelector('.h').value),
+        align: row.querySelector('.align').value,
+        auto_fit: row.querySelector('.auto-fit')?.checked !== false
+    }));
+}
+
+async function saveTexts(options = {}) {
+    const renderAfter = options.render !== false;
+    const toast = options.toast !== false;
+    if (!currentJob || !selectedAssetId) return;
+    const res = await api(`/api/image-localization/jobs/${currentJob.id}/assets/${selectedAssetId}/texts`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({texts: collectTexts()})
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    currentJob.assets = currentJob.assets.map(asset => asset.id === data.asset.id ? data.asset : asset);
+    if (data.job) currentJob = data.job;
+    if (toast) showToast('Metinler kaydedildi.', {variant: 'success'});
+    if (renderAfter) renderJob();
+    return data.asset;
+}
+
+function imageScale() {
+    const image = document.getElementById('editorImage');
+    if (!image || !image.naturalWidth || !image.clientWidth) return null;
+    return {
+        x: image.clientWidth / image.naturalWidth,
+        y: image.clientHeight / image.naturalHeight,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight
+    };
+}
+
+function syncOverlayFromRows() {
+    const overlay = document.getElementById('boxOverlay');
+    const scale = imageScale();
+    if (!overlay || !scale) return;
+    const rows = Array.from(document.querySelectorAll('.text-row'));
+    overlay.innerHTML = rows.map((row, index) => {
+        const x = Number(row.querySelector('.x').value || 0) * scale.x;
+        const y = Number(row.querySelector('.y').value || 0) * scale.y;
+        const w = Number(row.querySelector('.w').value || 260) * scale.x;
+        const h = Number(row.querySelector('.h').value || 90) * scale.y;
+        const label = row.querySelector('.translated').value || row.querySelector('.source').value || `Metin ${index + 1}`;
+        const autoFit = row.querySelector('.auto-fit')?.checked !== false;
+        return `
+            <div class="overlay-box absolute border-2 ${autoFit ? 'border-blue-500 bg-blue-500/10' : 'border-emerald-500 bg-emerald-500/10'} rounded-lg cursor-move"
+                 data-row-id="${escapeHtml(row.dataset.id)}"
+                 style="left:${x}px;top:${y}px;width:${Math.max(24, w)}px;height:${Math.max(24, h)}px">
+                <div class="absolute -top-6 left-0 max-w-full truncate rounded-full ${autoFit ? 'bg-blue-600' : 'bg-emerald-600'} px-2 py-0.5 text-[11px] font-semibold text-white">${escapeHtml(label)}</div>
+                <div class="resize-handle absolute right-[-6px] bottom-[-6px] w-4 h-4 rounded-full ${autoFit ? 'bg-blue-600' : 'bg-emerald-600'} border-2 border-white cursor-se-resize"></div>
+            </div>
+        `;
+    }).join('');
+    overlay.querySelectorAll('.overlay-box').forEach(enableBoxDrag);
+}
+
+function enableBoxDrag(box) {
+    box.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        const scale = imageScale();
+        if (!scale) return;
+        const row = document.querySelector(`.text-row[data-id="${CSS.escape(box.dataset.rowId)}"]`);
+        if (!row) return;
+        const resizing = event.target.classList.contains('resize-handle');
+        const start = {
+            pointerX: event.clientX,
+            pointerY: event.clientY,
+            x: Number(row.querySelector('.x').value || 0),
+            y: Number(row.querySelector('.y').value || 0),
+            w: Number(row.querySelector('.w').value || 260),
+            h: Number(row.querySelector('.h').value || 90)
+        };
+        box.setPointerCapture(event.pointerId);
+
+        function move(moveEvent) {
+            const dx = (moveEvent.clientX - start.pointerX) / scale.x;
+            const dy = (moveEvent.clientY - start.pointerY) / scale.y;
+            if (resizing) {
+                row.querySelector('.w').value = Math.max(30, Math.round(start.w + dx));
+                row.querySelector('.h').value = Math.max(24, Math.round(start.h + dy));
+            } else {
+                const nextX = Math.max(0, Math.min(scale.naturalWidth - start.w, start.x + dx));
+                const nextY = Math.max(0, Math.min(scale.naturalHeight - start.h, start.y + dy));
+                row.querySelector('.x').value = Math.round(nextX);
+                row.querySelector('.y').value = Math.round(nextY);
+            }
+            markManual(row);
+            syncOverlayFromRows();
+        }
+
+        function up(upEvent) {
+            try {
+                box.releasePointerCapture(upEvent.pointerId);
+            } catch (_) {}
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+        }
+
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+    });
+}
+
+async function generateJob() {
+    if (!currentJob) return;
+    await saveTexts({render: false, toast: false});
+    jobDetail.innerHTML = skeletonCards(3);
+    const res = await api(`/api/image-localization/jobs/${currentJob.id}/generate`, {method: 'POST'});
+    if (!res.ok) return;
+    const data = await res.json();
+    currentJob = data.job;
+    await loadJobs();
+    renderJob();
+    showToast('Tum gorseller icin cikti olusturuldu.', {variant: 'success'});
+}
+
+async function generateAsset() {
+    if (!currentJob || !selectedAssetId) return;
+    await saveTexts({render: false, toast: false});
+    const panel = document.getElementById('assetPanel');
+    if (panel) panel.innerHTML = skeletonCards(2);
+    const res = await api(`/api/image-localization/jobs/${currentJob.id}/assets/${selectedAssetId}/generate`, {method: 'POST'});
+    if (!res.ok) return;
+    const data = await res.json();
+    currentJob = data.job;
+    selectedAssetId = data.asset?.id || selectedAssetId;
+    await loadJobs();
+    renderJob();
+    showToast('Secili gorsel icin cikti olusturuldu.', {variant: 'success'});
+}
+
+async function runOcr() {
+    if (!currentJob || !selectedAssetId) return;
+    const ocrOptions = {
+        engine: document.getElementById('ocrEngine')?.value || 'auto',
+        ocr_model: document.getElementById('ocrModel')?.value || 'gemini-2.5-flash',
+        translation_model: document.getElementById('translationModel')?.value || 'gemini-2.5-flash'
+    };
+    const ocrButton = (typeof event !== 'undefined' && event?.currentTarget) ? event.currentTarget : document.querySelector('button[onclick="runOcr()"]');
+    if (ocrButton) ocrButton.disabled = true;
+    startOcrProgressPolling(currentJob.id, selectedAssetId, ocrOptions);
+    try {
+        const res = await api(`/api/image-localization/jobs/${currentJob.id}/assets/${selectedAssetId}/ocr`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(ocrOptions)
+        });
+        const data = await res.json();
+        if (!res.ok || data.ok === false) {
+            renderOcrProgress({
+                status: 'failed',
+                step: 'failed',
+                message: data.asset?.error_message || data.error || 'OCR başarısız.',
+                meta: ocrOptions,
+                history: [{step: 'failed', message: data.asset?.error_message || data.error || 'OCR başarısız.', meta: ocrOptions}]
+            }, ocrOptions);
+            showToast(data.asset?.error_message || data.error || 'OCR calistirilamadi.', {variant: 'error'});
+            return;
+        }
+        if (data.job) currentJob = data.job;
+        renderOcrProgress({
+            status: 'complete',
+            step: 'saved',
+            message: 'OCR sonuçları kaydedildi.',
+            meta: {count: data.asset?.approved_texts?.length ?? data.asset?.translations?.length ?? 0, ...ocrOptions},
+            history: [{step: 'saved', message: 'OCR sonuçları kaydedildi.', meta: {count: data.asset?.approved_texts?.length ?? data.asset?.translations?.length ?? 0, ...ocrOptions}}]
+        }, ocrOptions);
+        window.setTimeout(async () => {
+            await loadJobs();
+            renderJob();
+        }, 700);
+        showToast('OCR calistirildi ve kutular dolduruldu.', {variant: 'success'});
+    } finally {
+        stopOcrProgressPolling();
+        if (ocrButton) ocrButton.disabled = false;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadJobs();
+});
+window.addEventListener('resize', syncOverlayFromRows);
+</script>
+{% endblock %}

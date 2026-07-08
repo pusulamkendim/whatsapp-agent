@@ -4,7 +4,7 @@ from app.config import DATABASE_URL
 
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):
-    connect_args = {"check_same_thread": False}
+    connect_args = {"check_same_thread": False, "timeout": 30}
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine)
@@ -27,6 +27,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _run_alembic_migrations()
     _ensure_conversation_columns()
+    _ensure_rag_columns()
     _seed_platform_defaults()
     _seed_llm_catalog()
 
@@ -86,6 +87,39 @@ def _ensure_postgres_conversation_columns():
             conn.execute(text(statement))
 
 
+def _ensure_rag_columns():
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if "agents" in tables:
+        _ensure_table_columns("agents", {
+            "rag_top_k": "INTEGER DEFAULT 20",
+            "rag_final_chunks": "INTEGER DEFAULT 6",
+            "rag_min_score": "FLOAT",
+            "rag_max_context_chars": "INTEGER DEFAULT 12000",
+            "rag_hybrid_search": "BOOLEAN DEFAULT TRUE",
+            "rag_rerank_enabled": "BOOLEAN DEFAULT FALSE",
+            "rag_query_rewrite_enabled": "BOOLEAN DEFAULT FALSE",
+            "rag_embedding_model": "VARCHAR DEFAULT ''",
+        })
+    if "rag_query_logs" in tables:
+        _ensure_table_columns("rag_query_logs", {
+            "answer_latency_ms": "INTEGER",
+            "model_ref": "VARCHAR DEFAULT ''",
+            "prompt_tokens": "INTEGER",
+            "completion_tokens": "INTEGER",
+            "total_tokens": "INTEGER",
+        })
+
+
+def _ensure_table_columns(table_name: str, additions: dict[str, str]):
+    inspector = inspect(engine)
+    existing = {column["name"] for column in inspector.get_columns(table_name)}
+    with engine.begin() as conn:
+        for name, ddl in additions.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {name} {ddl}"))
+
+
 def _seed_platform_defaults():
     import os
     from app.models import Agent, AgentKnowledgeBase, ChannelAccount, KnowledgeBase, KnowledgeDocument, Route
@@ -93,54 +127,74 @@ def _seed_platform_defaults():
 
     db = SessionLocal()
     try:
-        retreat = db.query(Agent).filter(Agent.slug == "retreat").first()
-        if not retreat:
-            retreat = Agent(
-                slug="retreat",
-                name="Inziva Agent",
-                type="retreat",
-                model="gemini:gemini-2.5-flash",
-                active=True,
-            )
-            db.add(retreat)
+        with db.no_autoflush:
+            retreat = db.query(Agent).filter(Agent.slug == "retreat").first()
+            if not retreat:
+                retreat = Agent(
+                    slug="retreat",
+                    name="Inziva Agent",
+                    type="retreat",
+                    model="gemini:gemini-2.5-flash",
+                    active=True,
+                )
+                db.add(retreat)
 
-        restaurant = db.query(Agent).filter(Agent.slug == "restaurant").first()
-        if not restaurant:
-            restaurant = Agent(
-                slug="restaurant",
-                name="Restoran Agent",
-                type="restaurant",
-                model="gemini:gemini-2.5-flash",
-                active=True,
-            )
-            db.add(restaurant)
+            restaurant = db.query(Agent).filter(Agent.slug == "restaurant").first()
+            if not restaurant:
+                restaurant = Agent(
+                    slug="restaurant",
+                    name="Restoran Agent",
+                    type="restaurant",
+                    model="gemini:gemini-2.5-flash",
+                    active=True,
+                )
+                db.add(restaurant)
 
-        db.flush()
-        _ensure_default_knowledge_base(db, retreat)
+            rag_demo = db.query(Agent).filter(Agent.slug == "rag-demo").first()
+            if not rag_demo:
+                rag_demo = Agent(
+                    slug="rag-demo",
+                    name="RAG Demo Agent",
+                    type="generic_prompt",
+                    model="gemini:gemini-2.5-flash",
+                    system_prompt=(
+                        "Sen bilgi bankasina dayali cevap veren kisa ve net bir asistansin. "
+                        "Sadece sana verilen RAG kaynaklarindaki bilgileri kullan. "
+                        "Kaynaklarda yeterli bilgi yoksa 'Bu bilgi bilgi bankasinda yok' de. "
+                        "Cevaplari Turkce ver."
+                    ),
+                    active=True,
+                )
+                db.add(rag_demo)
 
-        def ensure_default_routes(channel_account: ChannelAccount):
-            defaults = [
-                ("default", "", retreat.id, 100),
-                ("prefix", "INZIVA", retreat.id, 10),
-                ("prefix", "RETREAT", retreat.id, 10),
-                ("prefix", "SAMMA", retreat.id, 10),
-                ("prefix", "LEZZET", restaurant.id, 10),
-            ]
-            for match_type, match_value, agent_id, priority in defaults:
-                exists = db.query(Route).filter(
-                    Route.channel_account_id == channel_account.id,
-                    Route.match_type == match_type,
-                    Route.match_value == match_value,
-                ).first()
-                if not exists:
-                    db.add(Route(
-                        channel_account_id=channel_account.id,
-                        agent_id=agent_id,
-                        priority=priority,
-                        match_type=match_type,
-                        match_value=match_value,
-                        active=True,
-                    ))
+            db.flush()
+            _ensure_default_knowledge_base(db, retreat)
+            _ensure_rag_demo_knowledge_base(db, rag_demo)
+
+            def ensure_default_routes(channel_account: ChannelAccount):
+                defaults = [
+                    ("default", "", retreat.id, 100),
+                    ("prefix", "INZIVA", retreat.id, 10),
+                    ("prefix", "RETREAT", retreat.id, 10),
+                    ("prefix", "SAMMA", retreat.id, 10),
+                    ("prefix", "LEZZET", restaurant.id, 10),
+                    ("prefix", "RAG", rag_demo.id, 10),
+                ]
+                for match_type, match_value, agent_id, priority in defaults:
+                    exists = db.query(Route).filter(
+                        Route.channel_account_id == channel_account.id,
+                        Route.match_type == match_type,
+                        Route.match_value == match_value,
+                    ).first()
+                    if not exists:
+                        db.add(Route(
+                            channel_account_id=channel_account.id,
+                            agent_id=agent_id,
+                            priority=priority,
+                            match_type=match_type,
+                            match_value=match_value,
+                            active=True,
+                        ))
 
         if WHATSAPP_PHONE_NUMBER_ID:
             account = db.query(ChannelAccount).filter(
@@ -244,36 +298,39 @@ def _seed_llm_catalog():
     db = SessionLocal()
     try:
         providers: dict[str, LlmProvider] = {}
-        for slug, defaults in provider_defaults.items():
-            provider = db.query(LlmProvider).filter(LlmProvider.slug == slug).first()
-            if not provider:
-                provider = LlmProvider(slug=slug, **defaults, active=True)
-                db.add(provider)
-                db.flush()
-            providers[slug] = provider
+        with db.no_autoflush:
+            for slug, defaults in provider_defaults.items():
+                provider = db.query(LlmProvider).filter(LlmProvider.slug == slug).first()
+                if not provider:
+                    provider = LlmProvider(slug=slug, **defaults, active=True)
+                    db.add(provider)
+                providers[slug] = provider
 
-        for option in MODEL_OPTIONS:
-            provider_slug = option["provider"]
-            provider = providers.get(provider_slug)
-            if not provider:
-                continue
-            model = db.query(LlmModel).filter(LlmModel.model_ref == option["model"]).first()
-            if not model:
-                model = LlmModel(
-                    provider_id=provider.id,
-                    slug=option["model"].split(":", 1)[1],
-                    display_name=option["label"],
-                    model_ref=option["model"],
-                    supports_tools=provider_slug in {"gemini", "openrouter", "deepseek", "openai", "ollama"},
-                    is_default=option["model"] == "gemini:gemini-2.5-flash",
-                    notes=option.get("notes", ""),
-                    active=True,
-                )
-                db.add(model)
-            else:
-                model.display_name = model.display_name or option["label"]
-                model.notes = model.notes or option.get("notes", "")
-                model.updated_at = datetime.now(timezone.utc)
+            db.flush()
+
+            for option in MODEL_OPTIONS:
+                provider_slug = option["provider"]
+                provider = providers.get(provider_slug)
+                if not provider:
+                    continue
+                model = db.query(LlmModel).filter(LlmModel.model_ref == option["model"]).first()
+                if not model:
+                    model = LlmModel(
+                        provider_id=provider.id,
+                        slug=option["model"].split(":", 1)[1],
+                        display_name=option["label"],
+                        model_ref=option["model"],
+                        supports_tools=provider_slug in {"gemini", "openrouter", "deepseek", "openai", "ollama"},
+                        supports_vision=provider_slug in {"gemini", "openrouter", "openai"},
+                        is_default=option["model"] == "gemini:gemini-2.5-flash",
+                        notes=option.get("notes", ""),
+                        active=True,
+                    )
+                    db.add(model)
+                else:
+                    model.display_name = model.display_name or option["label"]
+                    model.notes = model.notes or option.get("notes", "")
+                    model.updated_at = datetime.now(timezone.utc)
 
         db.commit()
     except Exception as exc:
@@ -318,6 +375,53 @@ def _ensure_default_knowledge_base(db, retreat_agent):
     if not link:
         db.add(AgentKnowledgeBase(
             agent_id=retreat_agent.id,
+            knowledge_base_id=kb.id,
+            priority=100,
+            active=True,
+        ))
+
+
+def _ensure_rag_demo_knowledge_base(db, rag_agent):
+    from app.models import AgentKnowledgeBase, KnowledgeBase, KnowledgeDocument
+
+    kb = db.query(KnowledgeBase).filter(KnowledgeBase.slug == "rag-demo-knowledge").first()
+    if not kb:
+        kb = KnowledgeBase(
+            slug="rag-demo-knowledge",
+            name="RAG Demo Knowledge",
+            description="RAG MVP test dokumani",
+            active=True,
+        )
+        db.add(kb)
+        db.flush()
+
+    if db.query(KnowledgeDocument).filter(KnowledgeDocument.knowledge_base_id == kb.id).count() == 0:
+        db.add(KnowledgeDocument(
+            knowledge_base_id=kb.id,
+            filename="rag-demo.md",
+            content_type="text/markdown",
+            content=(
+                "# Nova Bakim Paketi\n\n"
+                "Nova Bakim Paketi, sadece RAG demo agent testleri icin tanimlanan kurumsal destek paketidir.\n\n"
+                "## Fiyat\n\n"
+                "Nova Bakim Paketi aylik 4.750 TL olarak tanimlanmistir.\n\n"
+                "## Kapsam\n\n"
+                "Paket; bilgi bankasi guncelleme kontrolu, haftalik cevap kalitesi incelemesi ve "
+                "en fazla 3 yeni dokuman indeksleme destegi icerir.\n\n"
+                "## Dahil Olmayanlar\n\n"
+                "Ozel yazilim gelistirme, reklam yonetimi ve canli operator hizmeti bu pakete dahil degildir.\n"
+            ),
+            source_type="seed",
+            active=True,
+        ))
+
+    link = db.query(AgentKnowledgeBase).filter(
+        AgentKnowledgeBase.agent_id == rag_agent.id,
+        AgentKnowledgeBase.knowledge_base_id == kb.id,
+    ).first()
+    if not link:
+        db.add(AgentKnowledgeBase(
+            agent_id=rag_agent.id,
             knowledge_base_id=kb.id,
             priority=100,
             active=True,

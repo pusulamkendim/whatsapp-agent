@@ -77,6 +77,53 @@
                 <span class="text-sm font-medium">Knowledge base</span>
                 <textarea id="agentKnowledge" rows="6" class="w-full border rounded-md px-3 py-2 font-mono text-sm"></textarea>
             </label>
+            <div class="md:col-span-4 border-t border-slate-200 pt-4">
+                <div class="flex items-center gap-2 mb-3">
+                    <i data-lucide="search" class="w-4 h-4 text-slate-500"></i>
+                    <h4 class="font-semibold">RAG ayarlari</h4>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <label class="space-y-1">
+                        <span class="text-sm font-medium">Top K</span>
+                        <input id="agentRagTopK" type="number" min="1" step="1" class="w-full border rounded-md px-3 py-2">
+                    </label>
+                    <label class="space-y-1">
+                        <span class="text-sm font-medium">Final chunk</span>
+                        <input id="agentRagFinalChunks" type="number" min="1" step="1" class="w-full border rounded-md px-3 py-2">
+                    </label>
+                    <label class="space-y-1">
+                        <span class="text-sm font-medium">Min skor</span>
+                        <input id="agentRagMinScore" type="number" min="0" max="1" step="0.01" class="w-full border rounded-md px-3 py-2" placeholder="Varsayilan">
+                    </label>
+                    <label class="space-y-1">
+                        <span class="text-sm font-medium">Max context karakter</span>
+                        <input id="agentRagMaxContextChars" type="number" min="1000" step="500" class="w-full border rounded-md px-3 py-2">
+                    </label>
+                    <label class="space-y-1 md:col-span-2">
+                        <span class="text-sm font-medium">Embedding modeli</span>
+                        <select id="agentRagEmbeddingModel" class="w-full border rounded-md px-3 py-2">
+                            <option value="">Sistem varsayilani</option>
+                            <option value="local:hash-v1">Local hash fallback</option>
+                            <option value="gemini:text-embedding-004">Gemini text-embedding-004</option>
+                            <option value="openai:text-embedding-3-small">OpenAI text-embedding-3-small</option>
+                            <option value="openai:text-embedding-3-large">OpenAI text-embedding-3-large</option>
+                            <option value="ollama:nomic-embed-text">Ollama nomic-embed-text</option>
+                        </select>
+                    </label>
+                    <label class="flex items-center gap-2">
+                        <input id="agentRagHybridSearch" type="checkbox" class="rounded">
+                        <span class="text-sm font-medium">Hybrid search</span>
+                    </label>
+                    <label class="flex items-center gap-2">
+                        <input id="agentRagRerank" type="checkbox" class="rounded">
+                        <span class="text-sm font-medium">Rerank</span>
+                    </label>
+                    <label class="flex items-center gap-2 md:col-span-2">
+                        <input id="agentRagQueryRewrite" type="checkbox" class="rounded">
+                        <span class="text-sm font-medium">Konusma baglami ile query rewrite</span>
+                    </label>
+                </div>
+            </div>
         </div>
         <div class="app-modal-footer">
             <button type="button" onclick="agentDialog.close()" class="btn-secondary px-4 py-2">Vazgec</button>
@@ -104,6 +151,7 @@ async function loadAgents() {
                     <h3 class="text-base font-semibold">${agent.name}</h3>
                     <p class="text-sm text-slate-500">${agent.slug} · ${agent.type} · ${agent.model_label || agent.model}</p>
                     ${agent.fallback_model ? `<p class="text-xs text-slate-400 mt-1">Fallback: ${agent.fallback_model}</p>` : ''}
+                    <p class="text-xs text-slate-400 mt-1">RAG: top ${agent.rag_top_k || 20} · final ${agent.rag_final_chunks || 6} · ${agent.rag_hybrid_search ? 'hybrid' : 'vector'} · ${agent.rag_embedding_model || 'default embedding'}</p>
                 </div>
                 ${statusBadge(agent.active)}
             </div>
@@ -154,6 +202,18 @@ function openAgentForm(id = null) {
     agentActive.checked = agent ? agent.active : true;
     agentPrompt.value = agent?.system_prompt || '';
     agentKnowledge.value = agent?.knowledge_base || '';
+    agentRagTopK.value = agent?.rag_top_k ?? 20;
+    agentRagFinalChunks.value = agent?.rag_final_chunks ?? 6;
+    agentRagMinScore.value = agent?.rag_min_score ?? '';
+    agentRagMaxContextChars.value = agent?.rag_max_context_chars ?? 12000;
+    agentRagEmbeddingModel.value = agent?.rag_embedding_model || '';
+    if (agent?.rag_embedding_model && !Array.from(agentRagEmbeddingModel.options).some(option => option.value === agent.rag_embedding_model)) {
+        agentRagEmbeddingModel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(agent.rag_embedding_model)}">${escapeHtml(agent.rag_embedding_model)}</option>`);
+        agentRagEmbeddingModel.value = agent.rag_embedding_model;
+    }
+    agentRagHybridSearch.checked = agent ? Boolean(agent.rag_hybrid_search) : true;
+    agentRagRerank.checked = agent ? Boolean(agent.rag_rerank_enabled) : false;
+    agentRagQueryRewrite.checked = agent ? Boolean(agent.rag_query_rewrite_enabled) : false;
     if (window.enhanceSelects) window.enhanceSelects(agentDialog);
     agentDialog.showModal();
 }
@@ -205,7 +265,15 @@ agentForm.addEventListener('submit', async (event) => {
         failover_enabled: agentFailover.checked,
         active: agentActive.checked,
         system_prompt: agentPrompt.value,
-        knowledge_base: agentKnowledge.value
+        knowledge_base: agentKnowledge.value,
+        rag_top_k: Number(agentRagTopK.value || 20),
+        rag_final_chunks: Number(agentRagFinalChunks.value || 6),
+        rag_min_score: agentRagMinScore.value === '' ? null : Number(agentRagMinScore.value),
+        rag_max_context_chars: Number(agentRagMaxContextChars.value || 12000),
+        rag_embedding_model: agentRagEmbeddingModel.value,
+        rag_hybrid_search: agentRagHybridSearch.checked,
+        rag_rerank_enabled: agentRagRerank.checked,
+        rag_query_rewrite_enabled: agentRagQueryRewrite.checked
     };
     const id = agentId.value;
     const agent = agents.find(item => item.id === Number(id));

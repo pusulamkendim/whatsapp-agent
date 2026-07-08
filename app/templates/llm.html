@@ -37,15 +37,27 @@
             <h3 class="font-semibold">LLM kullanimi</h3>
             <p id="usageSummary" class="text-sm text-slate-500 mt-0.5"></p>
         </div>
-        <div class="inline-flex rounded-full border border-slate-200 p-1 bg-white w-fit">
-            <button onclick="setUsageDays(1)" class="usage-range btn-secondary px-3 py-1.5 text-xs" data-days="1">1 gun</button>
-            <button onclick="setUsageDays(7)" class="usage-range btn-secondary px-3 py-1.5 text-xs" data-days="7">7 gun</button>
-            <button onclick="setUsageDays(30)" class="usage-range btn-secondary px-3 py-1.5 text-xs" data-days="30">30 gun</button>
+        <div class="flex flex-wrap items-center gap-2">
+            <select id="usageLimit" onchange="setUsageLimit(Number(this.value))" class="border px-3 py-2 text-sm">
+                <option value="25">Son 25</option>
+                <option value="50">Son 50</option>
+                <option value="100">Son 100</option>
+                <option value="250">Son 250</option>
+            </select>
+            <div class="inline-flex rounded-full border border-slate-200 p-1 bg-white w-fit">
+                <button onclick="setUsageDays(1)" class="usage-range btn-secondary px-3 py-1.5 text-xs" data-days="1">1 gun</button>
+                <button onclick="setUsageDays(7)" class="usage-range btn-secondary px-3 py-1.5 text-xs" data-days="7">7 gun</button>
+                <button onclick="setUsageDays(30)" class="usage-range btn-secondary px-3 py-1.5 text-xs" data-days="30">30 gun</button>
+            </div>
         </div>
     </div>
     <div id="usageCards" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3 mb-4"></div>
     <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-4">
         <div class="space-y-4">
+            <div>
+                <h4 class="text-sm font-semibold mb-2">Source kirilimi</h4>
+                <div id="sourceUsage" class="space-y-2"></div>
+            </div>
             <div>
                 <h4 class="text-sm font-semibold mb-2">Provider kirilimi</h4>
                 <div id="providerUsage" class="space-y-2"></div>
@@ -188,18 +200,20 @@ let providers = [];
 let models = [];
 let usage = {};
 let usageDays = 7;
+let usageLimitValue = 50;
 
 async function loadAll() {
     providerList.innerHTML = skeletonCards(3);
     modelList.innerHTML = skeletonCards(4);
     usageCards.innerHTML = skeletonCards(5);
+    sourceUsage.innerHTML = skeletonCards(2);
     providerUsage.innerHTML = skeletonCards(2);
     modelUsage.innerHTML = skeletonCards(3);
     usageList.innerHTML = skeletonCards(3);
     const [providerRes, modelRes, usageRes] = await Promise.all([
         api('/api/llm/providers'),
         api('/api/llm/models'),
-        api(`/api/llm/usage?limit=12&days=${usageDays}`)
+        api(`/api/llm/usage?limit=${usageLimitValue}&days=${usageDays}`)
     ]);
     providers = await providerRes.json();
     models = await modelRes.json();
@@ -270,6 +284,7 @@ function renderUsage() {
         usageCard('Basari', `%${summary.success_rate || 0}`, 'success rate', 'check-circle-2'),
         usageCard('Latency', summary.avg_latency_ms ? `${summary.avg_latency_ms} ms` : '-', 'ortalama', 'timer')
     ].join('');
+    sourceUsage.innerHTML = renderBreakdown(usage.by_source || [], 'waypoints');
     providerUsage.innerHTML = renderBreakdown(usage.by_provider || [], 'server');
     modelUsage.innerHTML = renderBreakdown(usage.by_model || [], 'brain-circuit');
     usageLogCount.textContent = `${(usage.logs || []).length} log`;
@@ -277,7 +292,8 @@ function renderUsage() {
         <div class="border border-slate-200 rounded-lg px-4 py-3">
             <div class="flex items-start justify-between gap-3">
                 <div>
-                    <div class="font-medium">${escapeHtml(log.agent_slug || 'agent yok')}</div>
+                    <div class="font-medium">${escapeHtml(log.source || log.agent_slug || 'manual')}</div>
+                    ${log.operation ? `<div class="text-xs text-slate-500">${escapeHtml(log.operation)}</div>` : ''}
                     <div class="text-xs text-slate-500 font-mono">${escapeHtml(log.model_ref)}</div>
                     ${log.actual_model_ref ? `<div class="mt-1 text-xs text-blue-700 font-mono">${escapeHtml(log.actual_provider || 'routed')} -> ${escapeHtml(log.actual_model_ref)}</div>` : ''}
                     <div class="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
@@ -338,6 +354,11 @@ function renderBreakdown(items, icon) {
 
 function setUsageDays(days) {
     usageDays = days;
+    loadAll();
+}
+
+function setUsageLimit(limit) {
+    usageLimitValue = limit || 50;
     loadAll();
 }
 

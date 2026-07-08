@@ -38,6 +38,14 @@ class Agent(Base):
     failover_enabled = Column(Boolean, default=True)
     system_prompt = Column(Text, default="")
     knowledge_base = Column(Text, default="")
+    rag_top_k = Column(Integer, default=20)
+    rag_final_chunks = Column(Integer, default=6)
+    rag_min_score = Column(Float, nullable=True)
+    rag_max_context_chars = Column(Integer, default=12000)
+    rag_hybrid_search = Column(Boolean, default=True)
+    rag_rerank_enabled = Column(Boolean, default=False)
+    rag_query_rewrite_enabled = Column(Boolean, default=False)
+    rag_embedding_model = Column(String, default="")
     active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -93,6 +101,8 @@ class LlmUsageLog(Base):
 
     id = Column(Integer, primary_key=True)
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True, index=True)
+    source = Column(String, default="", index=True)
+    operation = Column(String, default="", index=True)
     provider = Column(String, default="", index=True)
     model_ref = Column(String, default="", index=True)
     prompt_tokens = Column(Integer, nullable=True)
@@ -158,6 +168,68 @@ class KnowledgeDocument(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     knowledge_base = relationship("KnowledgeBase", back_populates="documents")
+    chunks = relationship("KnowledgeChunk", back_populates="document")
+
+
+class KnowledgeChunk(Base):
+    __tablename__ = "knowledge_chunks"
+
+    id = Column(Integer, primary_key=True)
+    knowledge_base_id = Column(Integer, ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    document_id = Column(Integer, ForeignKey("knowledge_documents.id"), nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False)
+    title_path = Column(Text, default="")
+    content = Column(Text, nullable=False)
+    content_hash = Column(String, nullable=False, index=True)
+    token_count = Column(Integer, default=0)
+    metadata_json = Column(Text, default="{}")
+    active = Column(Boolean, default=True, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    knowledge_base = relationship("KnowledgeBase")
+    document = relationship("KnowledgeDocument", back_populates="chunks")
+    embeddings = relationship("KnowledgeEmbedding", back_populates="chunk")
+
+
+class KnowledgeEmbedding(Base):
+    __tablename__ = "knowledge_embeddings"
+
+    id = Column(Integer, primary_key=True)
+    chunk_id = Column(Integer, ForeignKey("knowledge_chunks.id"), nullable=False, index=True)
+    embedding_model = Column(String, nullable=False, index=True)
+    embedding_dim = Column(Integer, nullable=False)
+    vector_json = Column(Text, nullable=False)
+    content_hash = Column(String, nullable=False, index=True)
+    status = Column(String, default="ready", index=True)
+    error_message = Column(Text, default="")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    chunk = relationship("KnowledgeChunk", back_populates="embeddings")
+
+
+class RagQueryLog(Base):
+    __tablename__ = "rag_query_logs"
+
+    id = Column(Integer, primary_key=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True, index=True)
+    external_user_id = Column(String, default="", index=True)
+    query = Column(Text, nullable=False)
+    rewritten_query = Column(Text, default="")
+    retrieved_chunk_ids_json = Column(Text, default="[]")
+    scores_json = Column(Text, default="[]")
+    selected_context_chars = Column(Integer, default=0)
+    retrieval_latency_ms = Column(Integer, nullable=True)
+    rerank_latency_ms = Column(Integer, nullable=True)
+    answer_latency_ms = Column(Integer, nullable=True)
+    model_ref = Column(String, default="")
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    agent = relationship("Agent")
 
 
 class AgentKnowledgeBase(Base):
@@ -173,6 +245,41 @@ class AgentKnowledgeBase(Base):
 
     agent = relationship("Agent", back_populates="knowledge_links")
     knowledge_base = relationship("KnowledgeBase", back_populates="agent_links")
+
+
+class ImageLocalizationJob(Base):
+    __tablename__ = "image_localization_jobs"
+
+    id = Column(Integer, primary_key=True)
+    target_language = Column(String, default="tr")
+    status = Column(String, default="created", index=True)
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    assets = relationship("ImageLocalizationAsset", back_populates="job")
+
+
+class ImageLocalizationAsset(Base):
+    __tablename__ = "image_localization_assets"
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("image_localization_jobs.id"), nullable=False, index=True)
+    filename = Column(String, nullable=False)
+    content_type = Column(String, default="image/png")
+    original_path = Column(Text, nullable=False)
+    cropped_path = Column(Text, default="")
+    output_path = Column(Text, default="")
+    crop_json = Column(Text, default="{}")
+    ocr_json = Column(Text, default="[]")
+    translations_json = Column(Text, default="[]")
+    approved_texts_json = Column(Text, default="[]")
+    status = Column(String, default="uploaded", index=True)
+    error_message = Column(Text, default="")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    job = relationship("ImageLocalizationJob", back_populates="assets")
 
 
 class Restaurant(Base):

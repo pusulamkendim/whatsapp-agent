@@ -2,7 +2,9 @@ from datetime import datetime, timedelta, timezone
 import time
 
 from sqlalchemy.orm import Session
-from app.models import Agent, AgentKnowledgeBase, KnowledgeDocument, LlmModel, LlmUsageLog
+from app.models import Agent, AgentKnowledgeBase, KnowledgeChunk, KnowledgeDocument, LlmModel, LlmUsageLog, RagQueryLog
+from app.rag.indexing import index_knowledge_base
+from app.rag.retrieval import retrieve_agent_context
 from app.agent import chat as restaurant_chat
 from app.retreat_agent import chat as retreat_chat
 from app.llm import (
@@ -62,15 +64,21 @@ def _run_agent_with_usage(
         return response
 
     if agent.type == "retreat" or agent.slug == "retreat":
-        knowledge = build_agent_knowledge(agent, db)
+        knowledge = build_agent_prompt_knowledge(agent, customer_id, message, db)
         response = retreat_chat(customer_id, message, knowledge_base=knowledge or None, model=model)
-        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started), usage=summarize_llm_usage(usage_events))
+        usage = summarize_llm_usage(usage_events)
+        latency_ms = _elapsed_ms(started)
+        _annotate_latest_rag_log(db, agent, customer_id, model, latency_ms, usage)
+        _log_llm_usage(db, agent, model, success=True, latency_ms=latency_ms, usage=usage)
         return response
 
     if agent.type == "generic_prompt":
-        knowledge = build_agent_knowledge(agent, db)
+        knowledge = build_agent_prompt_knowledge(agent, customer_id, message, db)
         response = _generic_prompt_response(agent, customer_id, message, knowledge, model)
-        _log_llm_usage(db, agent, model, success=True, latency_ms=_elapsed_ms(started), usage=summarize_llm_usage(usage_events))
+        usage = summarize_llm_usage(usage_events)
+        latency_ms = _elapsed_ms(started)
+        _annotate_latest_rag_log(db, agent, customer_id, model, latency_ms, usage)
+        _log_llm_usage(db, agent, model, success=True, latency_ms=latency_ms, usage=usage)
         return response
 
     return "Bu agent tipi henüz desteklenmiyor."
@@ -96,6 +104,8 @@ def _log_llm_usage(
     try:
         db.add(LlmUsageLog(
             agent_id=agent.id,
+            source="agent",
+            operation=agent.slug or agent.type,
             provider=provider,
             model_ref=model_ref,
             prompt_tokens=usage.get("prompt_tokens"),
@@ -129,6 +139,31 @@ def _estimate_llm_cost(db: Session, model_ref: str, usage: dict) -> float | None
     input_price = model.input_price or 0
     output_price = model.output_price or 0
     return ((prompt_tokens * input_price) + (completion_tokens * output_price)) / 1_000_000
+
+
+def _annotate_latest_rag_log(
+    db: Session,
+    agent: Agent,
+    customer_id: str,
+    model_ref: str,
+    latency_ms: int,
+    usage: dict,
+) -> None:
+    try:
+        log = db.query(RagQueryLog).filter(
+            RagQueryLog.agent_id == agent.id,
+            RagQueryLog.external_user_id == customer_id,
+        ).order_by(RagQueryLog.id.desc()).first()
+        if not log:
+            return
+        log.answer_latency_ms = latency_ms
+        log.model_ref = model_ref
+        log.prompt_tokens = usage.get("prompt_tokens")
+        log.completion_tokens = usage.get("completion_tokens")
+        log.total_tokens = usage.get("total_tokens")
+        db.flush()
+    except Exception as exc:
+        print(f"⚠️ RAG log cevap metadatasi yazilamadi: {exc}")
 
 
 def _rate_limit_error(db: Session, model_ref: str) -> str | None:
@@ -173,6 +208,70 @@ def build_agent_knowledge(agent: Agent, db: Session) -> str:
         sections.append(f"# {agent.name} inline knowledge\n{agent.knowledge_base}")
 
     return "\n\n---\n\n".join(sections)
+
+
+def build_agent_prompt_knowledge(agent: Agent, customer_id: str, message: str, db: Session) -> str:
+    sections = []
+    rag_context = _retrieve_or_warm_agent_context(agent, customer_id, message, db)
+    if rag_context:
+        sections.append(
+            "RAG ILE SECILEN ILGILI BILGI PARCALARI:\n"
+            "Sadece bu kaynaklarda yer alan bilgilere dayan. "
+            "Cevap icin yeterli bilgi yoksa bunu acikca soyle, tahmin yurutme.\n\n"
+            f"{rag_context}"
+        )
+    if agent.knowledge_base:
+        sections.append(f"AGENT SABIT NOTLARI:\n{agent.knowledge_base}")
+    return "\n\n---\n\n".join(sections)
+
+
+def _retrieve_or_warm_agent_context(agent: Agent, customer_id: str, message: str, db: Session) -> str:
+    try:
+        result = retrieve_agent_context(agent, message, db, external_user_id=customer_id)
+        if result.context:
+            return result.context
+
+        if not _agent_has_indexable_docs(agent, db):
+            return ""
+
+        for link in db.query(AgentKnowledgeBase).filter(
+            AgentKnowledgeBase.agent_id == agent.id,
+            AgentKnowledgeBase.active == True,
+        ).order_by(AgentKnowledgeBase.priority.asc(), AgentKnowledgeBase.id.asc()).all():
+            index_knowledge_base(
+                link.knowledge_base_id,
+                db,
+                model_ref=agent.rag_embedding_model or None,
+                agent_id=agent.id,
+            )
+        db.flush()
+
+        result = retrieve_agent_context(agent, message, db, external_user_id=customer_id)
+        return result.context
+    except Exception as exc:
+        print(f"⚠️ RAG retrieval atlandı: {exc}")
+        return ""
+
+
+def _agent_has_indexable_docs(agent: Agent, db: Session) -> bool:
+    links = db.query(AgentKnowledgeBase).filter(
+        AgentKnowledgeBase.agent_id == agent.id,
+        AgentKnowledgeBase.active == True,
+    ).all()
+    if not links:
+        return False
+    kb_ids = [link.knowledge_base_id for link in links]
+    active_docs = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.knowledge_base_id.in_(kb_ids),
+        KnowledgeDocument.active == True,
+    ).count()
+    if active_docs == 0:
+        return False
+    active_chunks = db.query(KnowledgeChunk).filter(
+        KnowledgeChunk.knowledge_base_id.in_(kb_ids),
+        KnowledgeChunk.active == True,
+    ).count()
+    return active_chunks == 0
 
 
 generic_conversations: dict[str, list[dict]] = {}

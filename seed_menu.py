@@ -6,8 +6,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from app.database import init_db, SessionLocal
 from app.models import Restaurant, MenuItem
 
-def seed():
-    init_db()
+def seed(init_db_first: bool = True):
+    if init_db_first:
+        init_db()
     db = SessionLocal()
 
     # Mevcut veriyi temizle

@@ -7,7 +7,10 @@
         <h2 class="text-xl font-semibold text-slate-900">Bilgi Bankasi</h2>
         <p class="text-slate-500 mt-0.5">Dokumanlari bilgi bankalarinda topla, agentlara paylastir.</p>
     </div>
-    <button onclick="openBaseDialog()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni bilgi bankasi</button>
+    <div class="flex items-center gap-2">
+        <button onclick="reindexAll()" class="btn-secondary btn-icon px-4 py-2"><i data-lucide="refresh-cw"></i>Tumunu indeksle</button>
+        <button onclick="openBaseDialog()" class="btn-primary btn-icon px-4 py-2"><i data-lucide="plus"></i>Yeni bilgi bankasi</button>
+    </div>
 </div>
 
 <div class="knowledge-shell grid grid-cols-1 xl:grid-cols-[300px_minmax(0,1fr)] gap-4">
@@ -189,6 +192,7 @@ async function loadDetail(id) {
                 <p class="text-sm text-slate-500 mt-0.5">${escapeHtml(kb.description || 'Aciklama yok')}</p>
             </div>
             <div class="flex items-center gap-2">
+                <button onclick="reindexBase(${kb.id})" class="icon-btn" title="Yeniden indeksle" aria-label="Yeniden indeksle"><i data-lucide="refresh-cw"></i></button>
                 <button onclick="toggleBaseActive(${kb.id}, ${!kb.active})" class="icon-btn" title="${kb.active ? 'Pasife al' : 'Aktif et'}" aria-label="${kb.active ? 'Pasife al' : 'Aktif et'}"><i data-lucide="${kb.active ? 'pause' : 'play'}"></i></button>
                 <button onclick="deleteBase(${kb.id})" class="icon-btn danger" title="Sil" aria-label="Sil"><i data-lucide="trash-2"></i></button>
             </div>
@@ -219,6 +223,23 @@ async function loadDetail(id) {
                     <button onclick="saveAgentLinks()" class="btn-secondary btn-icon px-3 py-1.5"><i data-lucide="link"></i>Kaydet</button>
                 </div>
                 <div class="flex flex-wrap gap-2">${agentChecks}</div>
+            </div>
+        </section>
+
+        <section class="border-b border-slate-200 py-4">
+            <div class="flex flex-col gap-3">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="search-check" class="w-4 h-4 text-slate-500"></i>
+                    <h4 class="font-semibold">RAG test aramasi</h4>
+                </div>
+                <div class="grid grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)_auto] gap-2">
+                    <select id="ragTestAgent" class="border px-3 py-2">
+                        ${agents.map(agent => `<option value="${agent.id}" ${selectedAgentIds.has(agent.id) ? 'selected' : ''}>${escapeHtml(agent.name)}</option>`).join('')}
+                    </select>
+                    <input id="ragTestQuery" class="border px-3 py-2" placeholder="Ornek: fiyat nedir, iade kosulu ne?">
+                    <button onclick="testRagSearch()" class="btn-secondary btn-icon px-4 py-2"><i data-lucide="search"></i>Ara</button>
+                </div>
+                <pre id="ragTestResult" class="hidden max-h-96 overflow-auto rounded-2xl bg-slate-950 p-4 text-xs text-slate-100"></pre>
             </div>
         </section>
 
@@ -266,8 +287,10 @@ async function loadDetail(id) {
                             <p class="text-xs text-slate-500 mt-0.5 truncate">${escapeHtml(doc.preview)}</p>
                         </div>
                         <span class="kb-document-meta text-xs text-slate-500">
+                            <span class="whitespace-nowrap">${escapeHtml(doc.rag_status || 'not_indexed')} · ${formatCount(doc.chunk_count || 0, 'chunk')}</span>
                             <span class="truncate">${escapeHtml(doc.content_type || 'text/plain')}</span>
                             <span class="whitespace-nowrap">${formatCount(doc.character_count, 'karakter')}</span>
+                            <span class="whitespace-nowrap">${doc.last_indexed_at ? new Date(doc.last_indexed_at).toLocaleString('tr-TR') : 'indeks yok'}</span>
                             <span class="whitespace-nowrap">${new Date(doc.created_at).toLocaleDateString('tr-TR')}</span>
                         </span>
                         <span class="kb-document-action flex justify-end">
@@ -349,6 +372,47 @@ async function deleteBase(id) {
     await api(`/api/knowledge-bases/${id}`, {method: 'DELETE'});
     showToast('Bilgi bankasi pasife alindi.', {variant: 'success'});
     await loadAll();
+}
+
+async function reindexBase(id) {
+    const res = await api(`/api/knowledge-bases/${id}/reindex`, {method: 'POST'});
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+        showToast(data.detail || data.error || 'Indeksleme basarisiz.', {variant: 'error'});
+        return;
+    }
+    showToast(`${data.chunk_count || 0} chunk indekslendi.`, {variant: 'success'});
+    await loadAll(id);
+}
+
+async function reindexAll() {
+    const res = await api('/api/rag/reindex-all', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({})});
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+        showToast(data.detail || data.error || 'Tum indeksleme basarisiz.', {variant: 'error'});
+        return;
+    }
+    showToast(`${data.knowledge_base_count || 0} bilgi bankasi, ${data.chunk_count || 0} chunk indekslendi.`, {variant: 'success'});
+    await loadAll(selectedBaseId);
+}
+
+async function testRagSearch() {
+    const agentId = Number(document.getElementById('ragTestAgent')?.value || 0);
+    const query = document.getElementById('ragTestQuery')?.value?.trim() || '';
+    const output = document.getElementById('ragTestResult');
+    if (!agentId || !query || !output) return;
+    output.classList.remove('hidden');
+    output.textContent = 'Araniyor...';
+    const res = await api(`/api/agents/${agentId}/rag/search`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({query})
+    });
+    const data = await res.json();
+    output.textContent = JSON.stringify(data, null, 2);
+    if (!res.ok || !data.ok) {
+        showToast(data.detail || data.error || 'RAG aramasi basarisiz.', {variant: 'error'});
+    }
 }
 
 async function saveAgentLinks() {

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import hmac
@@ -5,12 +6,14 @@ import hashlib
 import secrets
 import re
 import threading
+import time
 from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
 from fastapi import FastAPI, Request, Query, BackgroundTasks, UploadFile, File
-from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from PIL import Image
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from app.config import WHATSAPP_VERIFY_TOKEN
 from app.database import init_db, SessionLocal
@@ -29,6 +32,17 @@ from app.llm import (
     run_openai_simple_chat,
     summarize_llm_usage,
 )
+from app.llm_usage import add_llm_usage_events, add_llm_usage_log
+from app.image_localization import (
+    fit_text_boxes_to_content,
+    generate_output,
+    prepare_asset,
+    run_ocr_pipeline,
+    safe_json_loads,
+    store_url_images,
+    store_upload,
+    warm_ocr_models,
+)
 from app.models import (
     Agent,
     AgentKnowledgeBase,
@@ -37,12 +51,19 @@ from app.models import (
     DailyStat,
     Handoff,
     KnowledgeBase,
+    KnowledgeChunk,
     KnowledgeDocument,
+    KnowledgeEmbedding,
+    ImageLocalizationAsset,
+    ImageLocalizationJob,
     LlmModel,
     LlmProvider,
     LlmUsageLog,
+    RagQueryLog,
     Route,
 )
+from app.rag.indexing import index_document, index_knowledge_base, reindex_all
+from app.rag.retrieval import retrieve_agent_context
 from app.router import find_channel_account, resolve_route
 
 app = FastAPI(title="WhatsApp Multi-Agent")
@@ -55,24 +76,64 @@ IS_PRODUCTION = bool(os.getenv("COOLIFY_RESOURCE_UUID")) or os.getenv("ENV", "")
 
 # Agent routing: müşteri hangi agent'a bağlı? Key: channel_account_id:external_user_id
 customer_agents: dict[str, int] = {}
+ocr_progress_lock = threading.Lock()
+ocr_progress: dict[str, dict] = {}
 
 # İşlenmiş mesaj ID'leri (duplicate önleme)
 processed_messages: OrderedDict[str, bool] = OrderedDict()
 MAX_PROCESSED = 1000
 
+
+def _ocr_progress_key(job_id: int, asset_id: int) -> str:
+    return f"{job_id}:{asset_id}"
+
+
+def _set_ocr_progress(job_id: int, asset_id: int, step: str, message: str, meta: dict | None = None, status: str = "running") -> None:
+    payload = {
+        "job_id": job_id,
+        "asset_id": asset_id,
+        "status": status,
+        "step": step,
+        "message": message,
+        "meta": meta or {},
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with ocr_progress_lock:
+        current = ocr_progress.get(_ocr_progress_key(job_id, asset_id), {})
+        history = list(current.get("history") or [])
+        if not history or history[-1].get("step") != step or history[-1].get("message") != message:
+            history.append({key: payload[key] for key in ["step", "message", "meta", "updated_at"]})
+        payload["history"] = history[-30:]
+        ocr_progress[_ocr_progress_key(job_id, asset_id)] = payload
+
+
+def _get_ocr_progress(job_id: int, asset_id: int) -> dict:
+    with ocr_progress_lock:
+        return dict(ocr_progress.get(_ocr_progress_key(job_id, asset_id), {
+            "job_id": job_id,
+            "asset_id": asset_id,
+            "status": "idle",
+            "step": "",
+            "message": "",
+            "meta": {},
+            "history": [],
+            "updated_at": "",
+        }))
+
 @app.on_event("startup")
 def startup():
     init_db()
     threading.Thread(target=_sync_prices_on_startup, daemon=True).start()
+    if os.getenv("OCR_WARMUP_ENABLE", "false").lower() in {"1", "true", "yes"}:
+        threading.Thread(target=_warm_ocr_on_startup, daemon=True).start()
     # Restoran menü verisi yükle (SQLite sıfırlanırsa diye)
     from app.models import Restaurant, MenuItem
     db = SessionLocal()
     if db.query(Restaurant).count() == 0:
         import importlib, seed_menu
-        seed_menu.seed()
+        seed_menu.seed(init_db_first=False)
     db.close()
     # Telegram webhook ayarla
-    import os
     if os.getenv("TELEGRAM_BOT_TOKEN"):
         base_url = os.getenv("BASE_URL", "https://agentapi.pusulamkendim.com")
         try:
@@ -94,6 +155,15 @@ def _sync_prices_on_startup():
             print(f"💸 LLM price sync: {result}")
     except Exception as exc:
         print(f"⚠️ LLM price sync atlandı: {type(exc).__name__}")
+
+
+def _warm_ocr_on_startup():
+    try:
+        result = warm_ocr_models()
+        if result.get("paddleocr") or result.get("easyocr"):
+            print(f"🧠 OCR warmup: {result}")
+    except Exception as exc:
+        print(f"⚠️ OCR warmup atlandı: {type(exc).__name__}")
 
 
 @app.middleware("http")
@@ -658,6 +728,14 @@ def get_agents():
             "model_label": provider_label(a.model),
             "system_prompt": a.system_prompt or _default_prompt_preview(a.slug),
             "knowledge_base": a.knowledge_base or "",
+            "rag_top_k": a.rag_top_k or 20,
+            "rag_final_chunks": a.rag_final_chunks or 6,
+            "rag_min_score": a.rag_min_score,
+            "rag_max_context_chars": a.rag_max_context_chars or 12000,
+            "rag_hybrid_search": a.rag_hybrid_search,
+            "rag_rerank_enabled": a.rag_rerank_enabled,
+            "rag_query_rewrite_enabled": a.rag_query_rewrite_enabled,
+            "rag_embedding_model": a.rag_embedding_model or "",
         } for a in agents]
     finally:
         db.close()
@@ -687,6 +765,14 @@ async def create_agent(request: Request):
             failover_enabled=data.get("failover_enabled", True),
             system_prompt=data.get("system_prompt", ""),
             knowledge_base=data.get("knowledge_base", ""),
+            rag_top_k=data.get("rag_top_k", 20),
+            rag_final_chunks=data.get("rag_final_chunks", 6),
+            rag_min_score=data.get("rag_min_score"),
+            rag_max_context_chars=data.get("rag_max_context_chars", 12000),
+            rag_hybrid_search=data.get("rag_hybrid_search", True),
+            rag_rerank_enabled=data.get("rag_rerank_enabled", False),
+            rag_query_rewrite_enabled=data.get("rag_query_rewrite_enabled", False),
+            rag_embedding_model=data.get("rag_embedding_model", ""),
             active=data.get("active", True),
         )
         db.add(agent)
@@ -732,6 +818,18 @@ async def update_agent_config(agent_type: str, request: Request):
                 retreat_agent.SYSTEM_PROMPT = data["system_prompt"]
         if "knowledge_base" in data:
             agent.knowledge_base = data["knowledge_base"]
+        for field in [
+            "rag_top_k",
+            "rag_final_chunks",
+            "rag_min_score",
+            "rag_max_context_chars",
+            "rag_hybrid_search",
+            "rag_rerank_enabled",
+            "rag_query_rewrite_enabled",
+            "rag_embedding_model",
+        ]:
+            if field in data:
+                setattr(agent, field, data[field] or "" if field == "rag_embedding_model" else data[field])
         db.commit()
         return {"ok": True}
     finally:
@@ -913,6 +1011,8 @@ async def test_llm_model(request: Request):
     data = await request.json()
     model_ref = data.get("model_ref") or "gemini:gemini-2.5-flash"
     message = data.get("message") or "Reply with OK only."
+    started = time.perf_counter()
+    usage_events = []
     try:
         with capture_llm_usage() as usage_events:
             if parse_model_ref(model_ref)[0] == "gemini":
@@ -928,14 +1028,63 @@ async def test_llm_model(request: Request):
             else:
                 text = run_openai_simple_chat(model_ref, [{"role": "user", "content": message}], 0)
             usage = summarize_llm_usage(usage_events)
+        db = SessionLocal()
+        try:
+            if usage_events:
+                add_llm_usage_events(
+                    db,
+                    usage_events,
+                    source="llm-page",
+                    operation="model-test",
+                    latency_ms=_elapsed_ms(started),
+                )
+            else:
+                add_llm_usage_log(
+                    db,
+                    model_ref=model_ref,
+                    success=True,
+                    source="llm-page",
+                    operation="model-test",
+                    latency_ms=_elapsed_ms(started),
+                )
+            db.commit()
+        finally:
+            db.close()
         return {"ok": True, "model_ref": model_ref, "response": text, "usage": usage}
     except Exception as exc:
+        db = SessionLocal()
+        try:
+            if usage_events:
+                add_llm_usage_events(
+                    db,
+                    usage_events,
+                    source="llm-page",
+                    operation="model-test",
+                    latency_ms=_elapsed_ms(started),
+                    success=False,
+                    error=exc,
+                )
+            else:
+                add_llm_usage_log(
+                    db,
+                    model_ref=model_ref,
+                    success=False,
+                    source="llm-page",
+                    operation="model-test",
+                    latency_ms=_elapsed_ms(started),
+                    error=exc,
+                )
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
         return JSONResponse({"ok": False, "model_ref": model_ref, "error": str(exc)[:800]}, status_code=400)
 
 
 @app.get("/api/llm/usage")
 def get_llm_usage(
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=500),
     days: int = Query(7, ge=1, le=90),
 ):
     db = SessionLocal()
@@ -963,12 +1112,15 @@ def get_llm_usage(
                 "success_rate": round(((total - errors) / total) * 100, 1) if total else 0,
                 "days": days,
             },
+            "by_source": _usage_breakdown(all_rows, "source"),
             "by_provider": _usage_breakdown(all_rows, "provider"),
             "by_model": _usage_breakdown(all_rows, "model_ref"),
             "logs": [{
                 "id": row.id,
                 "agent_id": row.agent_id,
                 "agent_slug": row.agent.slug if row.agent else "",
+                "source": row.source or "",
+                "operation": row.operation or "",
                 "provider": row.provider,
                 "model_ref": row.model_ref,
                 "generation_id": row.generation_id or "",
@@ -1018,6 +1170,10 @@ def _usage_breakdown(rows: list[LlmUsageLog], field: str) -> list[dict]:
             "avg_latency_ms": round(sum(latencies) / len(latencies)) if latencies else None,
         })
     return sorted(items, key=lambda item: (item["total_tokens"], item["calls"]), reverse=True)
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
 
 
 def _llm_provider_payload(provider: LlmProvider) -> dict:
@@ -1131,6 +1287,34 @@ def _knowledge_base_payload(kb: KnowledgeBase) -> dict:
 
 
 def _document_payload(doc: KnowledgeDocument) -> dict:
+    active_chunks = [chunk for chunk in doc.chunks if chunk.active]
+    active_embeddings = [
+        embedding
+        for chunk in active_chunks
+        for embedding in chunk.embeddings
+        if embedding.status == "ready"
+    ]
+    failed_embeddings = [
+        embedding
+        for chunk in active_chunks
+        for embedding in chunk.embeddings
+        if embedding.status == "failed"
+    ]
+    indexed_at_values = [
+        embedding.updated_at or embedding.created_at
+        for chunk in active_chunks
+        for embedding in chunk.embeddings
+        if embedding.status == "ready" and (embedding.updated_at or embedding.created_at)
+    ]
+    last_indexed_at = max(indexed_at_values).isoformat() if indexed_at_values else ""
+    if active_chunks and len(active_embeddings) >= len(active_chunks):
+        rag_status = "indexed"
+    elif failed_embeddings:
+        rag_status = "failed"
+    elif active_chunks:
+        rag_status = "pending"
+    else:
+        rag_status = "not_indexed"
     return {
         "id": doc.id,
         "knowledge_base_id": doc.knowledge_base_id,
@@ -1139,6 +1323,10 @@ def _document_payload(doc: KnowledgeDocument) -> dict:
         "source_type": doc.source_type,
         "active": doc.active,
         "character_count": len(doc.content or ""),
+        "chunk_count": len(active_chunks),
+        "rag_status": rag_status,
+        "rag_error": failed_embeddings[-1].error_message if failed_embeddings else "",
+        "last_indexed_at": last_indexed_at,
         "preview": (doc.content or "")[:280],
         "created_at": doc.created_at.isoformat() if doc.created_at else "",
         "updated_at": doc.updated_at.isoformat() if doc.updated_at else "",
@@ -1406,6 +1594,7 @@ def delete_knowledge_base(kb_id: int):
             return JSONResponse({"error": "not_found"}, status_code=404)
         kb.active = False
         db.query(AgentKnowledgeBase).filter(AgentKnowledgeBase.knowledge_base_id == kb.id).update({"active": False})
+        db.query(KnowledgeChunk).filter(KnowledgeChunk.knowledge_base_id == kb.id).update({"active": False})
         db.commit()
         return {"ok": True}
     finally:
@@ -1460,6 +1649,7 @@ async def upload_knowledge_documents(kb_id: int, files: list[UploadFile] = File(
             )
             db.add(doc)
             db.flush()
+            index_document(doc, db)
             created.append(_document_payload(doc))
 
         db.commit()
@@ -1489,6 +1679,8 @@ async def create_knowledge_text_document(kb_id: int, request: Request):
             active=True,
         )
         db.add(doc)
+        db.flush()
+        index_document(doc, db)
         db.commit()
         db.refresh(doc)
         return {"ok": True, "document": _document_payload(doc)}
@@ -1504,8 +1696,98 @@ def delete_knowledge_document(document_id: int):
         if not doc:
             return JSONResponse({"error": "not_found"}, status_code=404)
         doc.active = False
+        db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == doc.id).update({"active": False})
         db.commit()
         return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/knowledge-bases/{kb_id}/reindex")
+def reindex_knowledge_base(kb_id: int):
+    db = SessionLocal()
+    try:
+        kb = db.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id, KnowledgeBase.active == True).first()
+        if not kb:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        result = index_knowledge_base(kb.id, db)
+        db.commit()
+        return result
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse({"error": "reindex_failed", "detail": str(exc)[:1000]}, status_code=500)
+    finally:
+        db.close()
+
+
+@app.post("/api/rag/reindex-all")
+async def reindex_all_knowledge(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    db = SessionLocal()
+    try:
+        result = reindex_all(db, model_ref=data.get("embedding_model"))
+        db.commit()
+        return result
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse({"error": "reindex_all_failed", "detail": str(exc)[:1000]}, status_code=500)
+    finally:
+        db.close()
+
+
+@app.post("/api/agents/{agent_id}/rag/search")
+async def search_agent_rag(agent_id: int, request: Request):
+    data = await request.json()
+    query = (data.get("query") or "").strip()
+    if not query:
+        return JSONResponse({"error": "query_required"}, status_code=400)
+
+    db = SessionLocal()
+    try:
+        agent = db.query(Agent).filter(Agent.id == agent_id, Agent.active == True).first()
+        if not agent:
+            return JSONResponse({"error": "agent_not_found"}, status_code=404)
+        result = retrieve_agent_context(
+            agent,
+            query,
+            db,
+            external_user_id=data.get("external_user_id", "rag-test"),
+            final_chunks=int(data.get("final_chunks") or agent.rag_final_chunks or 6),
+            top_k=int(data.get("top_k") or agent.rag_top_k or 20),
+            max_context_chars=int(data.get("max_context_chars") or agent.rag_max_context_chars or 12000),
+            min_score=data.get("min_score", agent.rag_min_score),
+            hybrid_search=data.get("hybrid_search", agent.rag_hybrid_search),
+            rerank_enabled=data.get("rerank_enabled", agent.rag_rerank_enabled),
+            query_rewrite_enabled=data.get("query_rewrite_enabled", agent.rag_query_rewrite_enabled),
+            model_ref=data.get("embedding_model") or agent.rag_embedding_model or None,
+        )
+        db.commit()
+        return {
+            "ok": True,
+            "query": result.query,
+            "rewritten_query": result.rewritten_query,
+            "context": result.context,
+            "retrieval_latency_ms": result.retrieval_latency_ms,
+            "chunks": [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "knowledge_base_id": chunk.knowledge_base_id,
+                    "document_id": chunk.document_id,
+                    "title_path": chunk.title_path,
+                    "score": chunk.score,
+                    "vector_score": chunk.vector_score,
+                    "keyword_score": chunk.keyword_score,
+                    "preview": chunk.content[:500],
+                }
+                for chunk in result.chunks
+            ],
+        }
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse({"error": "rag_search_failed", "detail": str(exc)[:1000]}, status_code=500)
     finally:
         db.close()
 
@@ -1600,6 +1882,437 @@ async def update_knowledge(request: Request):
         db.close()
 
 
+# ============ IMAGE LOCALIZATION API ============
+
+@app.post("/api/image-localization/jobs")
+async def create_image_localization_job(request: Request, files: list[UploadFile] = File(default=[])):
+    form = await request.form()
+    urls = [value.strip() for value in form.getlist("urls") if isinstance(value, str) and value.strip()]
+    if not files and not urls:
+        return JSONResponse({"error": "files_or_urls_required"}, status_code=400)
+
+    db = SessionLocal()
+    try:
+        job = ImageLocalizationJob(target_language="tr", status="uploaded")
+        db.add(job)
+        db.flush()
+
+        assets = []
+        for upload in files:
+            raw = await upload.read()
+            asset = _create_image_localization_asset_from_source(
+                job.id,
+                upload.filename or "image.png",
+                upload.content_type or "image/png",
+                lambda: store_upload(upload.filename or "image.png", upload.content_type or "image/png", raw),
+            )
+            db.add(asset)
+            db.flush()
+            assets.append(asset)
+
+        for url in urls:
+            try:
+                stored_images = store_url_images(url)
+            except ValueError as exc:
+                asset = ImageLocalizationAsset(
+                    job_id=job.id,
+                    filename=os.path.basename(url) or url[:120] or "remote-image",
+                    content_type="image/png",
+                    original_path="",
+                    status="failed",
+                    error_message=str(exc),
+                )
+                db.add(asset)
+                db.flush()
+                assets.append(asset)
+                continue
+            except Exception as exc:
+                asset = ImageLocalizationAsset(
+                    job_id=job.id,
+                    filename=os.path.basename(url) or url[:120] or "remote-image",
+                    content_type="image/png",
+                    original_path="",
+                    status="failed",
+                    error_message=f"{type(exc).__name__}: {str(exc)[:400]}",
+                )
+                db.add(asset)
+                db.flush()
+                assets.append(asset)
+                continue
+
+            for stored in stored_images:
+                asset = _create_image_localization_asset_from_source(
+                    job.id,
+                    stored.filename,
+                    stored.content_type,
+                    lambda stored_image=stored: stored_image,
+                )
+                db.add(asset)
+                db.flush()
+                assets.append(asset)
+
+        job.status = "uploaded" if any(asset.status != "failed" for asset in assets) else "failed"
+        db.commit()
+        db.refresh(job)
+        return {"ok": True, "job": _image_localization_job_payload(job)}
+    finally:
+        db.close()
+
+
+def _create_image_localization_asset_from_source(job_id: int, filename: str, content_type: str, store_fn) -> ImageLocalizationAsset:
+    try:
+        stored = store_fn()
+        prepared = prepare_asset(stored.path)
+        return ImageLocalizationAsset(
+            job_id=job_id,
+            filename=stored.filename,
+            content_type=stored.content_type,
+            original_path=stored.path,
+            cropped_path=prepared["cropped_path"],
+            crop_json=json.dumps(prepared["crop"], ensure_ascii=False),
+            ocr_json=json.dumps(prepared["ocr"], ensure_ascii=False),
+            translations_json=json.dumps(prepared["translations"], ensure_ascii=False),
+            approved_texts_json=json.dumps(prepared["translations"], ensure_ascii=False),
+            status="uploaded",
+        )
+    except ValueError as exc:
+        return ImageLocalizationAsset(
+            job_id=job_id,
+            filename=os.path.basename(filename) or filename[:120] or "remote-image",
+            content_type=content_type,
+            original_path="",
+            status="failed",
+            error_message=str(exc),
+        )
+    except Exception as exc:
+        return ImageLocalizationAsset(
+            job_id=job_id,
+            filename=os.path.basename(filename) or filename[:120] or "remote-image",
+            content_type=content_type,
+            original_path="",
+            status="failed",
+            error_message=f"{type(exc).__name__}: {str(exc)[:400]}",
+        )
+
+
+@app.get("/api/image-localization/jobs")
+def list_image_localization_jobs():
+    db = SessionLocal()
+    try:
+        jobs = db.query(ImageLocalizationJob).order_by(ImageLocalizationJob.id.desc()).limit(25).all()
+        return [_image_localization_job_payload(job, include_assets=False) for job in jobs]
+    finally:
+        db.close()
+
+
+@app.get("/api/image-localization/jobs/{job_id}")
+def get_image_localization_job(job_id: int):
+    db = SessionLocal()
+    try:
+        job = db.query(ImageLocalizationJob).filter(ImageLocalizationJob.id == job_id).first()
+        if not job:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return _image_localization_job_payload(job)
+    finally:
+        db.close()
+
+
+@app.put("/api/image-localization/jobs/{job_id}/assets/{asset_id}/texts")
+async def update_image_localization_texts(job_id: int, asset_id: int, request: Request):
+    data = await request.json()
+    texts = data.get("texts")
+    if not isinstance(texts, list):
+        return JSONResponse({"error": "texts_required"}, status_code=400)
+
+    normalized = []
+    for index, item in enumerate(texts, start=1):
+        if not isinstance(item, dict):
+            continue
+        translated = (item.get("translated_text") or item.get("source_text") or "").strip()
+        if not translated:
+            continue
+        normalized.append({
+            "id": item.get("id") or f"text_{index}",
+            "source_text": item.get("source_text") or "",
+            "translated_text": translated,
+            "x": int(float(item.get("x") or 0)),
+            "y": int(float(item.get("y") or 0)),
+            "width": max(20, int(float(item.get("width") or 220))),
+            "height": max(20, int(float(item.get("height") or 80))),
+            "confidence": item.get("confidence") or 0,
+            "align": item.get("align") or "center",
+            "auto_fit": bool(item.get("auto_fit", True)),
+        })
+
+    db = SessionLocal()
+    try:
+        asset = db.query(ImageLocalizationAsset).filter(
+            ImageLocalizationAsset.id == asset_id,
+            ImageLocalizationAsset.job_id == job_id,
+        ).first()
+        if not asset:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if asset.cropped_path and os.path.exists(asset.cropped_path):
+            with Image.open(asset.cropped_path) as image:
+                normalized = fit_text_boxes_to_content(normalized, image.size, auto_only=True)
+        asset.approved_texts_json = json.dumps(normalized, ensure_ascii=False)
+        asset.status = "approved"
+        job = db.query(ImageLocalizationJob).filter(ImageLocalizationJob.id == job_id).first()
+        if job:
+            _sync_image_localization_job_status(job)
+        db.commit()
+        if job:
+            db.refresh(job)
+        db.refresh(asset)
+        return {"ok": True, "asset": _image_localization_asset_payload(asset), "job": _image_localization_job_payload(job) if job else None}
+    finally:
+        db.close()
+
+
+@app.post("/api/image-localization/jobs/{job_id}/assets/{asset_id}/ocr")
+async def run_image_localization_asset_ocr(job_id: int, asset_id: int, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    options = {
+        "engine": body.get("engine") if isinstance(body, dict) else None,
+        "ocr_model": body.get("ocr_model") if isinstance(body, dict) else None,
+        "translation_model": body.get("translation_model") if isinstance(body, dict) else None,
+    }
+    started = time.perf_counter()
+    usage_events = []
+    _set_ocr_progress(
+        job_id,
+        asset_id,
+        "queued",
+        "OCR isteği alındı.",
+        {
+            "engine": options.get("engine") or "auto",
+            "ocr_model": options.get("ocr_model") or "gemini-2.5-flash",
+            "translation_model": options.get("translation_model") or "gemini-2.5-flash",
+        },
+    )
+
+    def progress_callback(step: str, message: str, meta: dict | None = None) -> None:
+        _set_ocr_progress(job_id, asset_id, step, message, meta)
+
+    db = SessionLocal()
+    try:
+        job = db.query(ImageLocalizationJob).filter(ImageLocalizationJob.id == job_id).first()
+        asset = db.query(ImageLocalizationAsset).filter(
+            ImageLocalizationAsset.id == asset_id,
+            ImageLocalizationAsset.job_id == job_id,
+        ).first()
+        if not asset:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if not asset.original_path or not os.path.exists(asset.original_path):
+            asset.status = "failed"
+            asset.error_message = "original_image_missing"
+            db.commit()
+            db.refresh(asset)
+            return {"ok": False, "asset": _image_localization_asset_payload(asset)}
+
+        asset.status = "processing"
+        asset.error_message = ""
+        db.commit()
+
+        with capture_llm_usage() as usage_events:
+            result = await asyncio.to_thread(
+                run_ocr_pipeline,
+                asset.original_path,
+                options,
+                progress_callback,
+            )
+        translations = result.get("translations", [])
+        asset.ocr_json = json.dumps(result.get("ocr", []), ensure_ascii=False)
+        asset.translations_json = json.dumps(translations, ensure_ascii=False)
+        asset.approved_texts_json = json.dumps(translations, ensure_ascii=False)
+        asset.status = "needs_review"
+        asset.error_message = ""
+        add_llm_usage_events(
+            db,
+            usage_events,
+            source="image-localizer",
+            operation="ocr-pipeline",
+            latency_ms=_elapsed_ms(started),
+        )
+        if job:
+            _sync_image_localization_job_status(job)
+        db.commit()
+        if job:
+            db.refresh(job)
+        db.refresh(asset)
+        _set_ocr_progress(job_id, asset_id, "saved", "OCR sonuçları kaydedildi.", {"count": len(translations)}, status="complete")
+        return {"ok": True, "asset": _image_localization_asset_payload(asset), "job": _image_localization_job_payload(job) if job else None}
+    except Exception as exc:
+        asset = db.query(ImageLocalizationAsset).filter(
+            ImageLocalizationAsset.id == asset_id,
+            ImageLocalizationAsset.job_id == job_id,
+        ).first()
+        if asset:
+            asset.status = "failed"
+            asset.error_message = f"{type(exc).__name__}: {str(exc)[:400]}"
+            _set_ocr_progress(job_id, asset_id, "failed", asset.error_message, {"error": type(exc).__name__}, status="failed")
+            if usage_events:
+                add_llm_usage_events(
+                    db,
+                    usage_events,
+                    source="image-localizer",
+                    operation="ocr-pipeline",
+                    latency_ms=_elapsed_ms(started),
+                    success=False,
+                    error=exc,
+                )
+            db.commit()
+            db.refresh(asset)
+            return {"ok": False, "asset": _image_localization_asset_payload(asset)}
+        return JSONResponse({"error": "ocr_failed"}, status_code=500)
+    finally:
+        db.close()
+
+
+@app.get("/api/image-localization/jobs/{job_id}/assets/{asset_id}/ocr-progress")
+def get_image_localization_asset_ocr_progress(job_id: int, asset_id: int):
+    return _get_ocr_progress(job_id, asset_id)
+
+
+@app.post("/api/image-localization/jobs/{job_id}/generate")
+def generate_image_localization_job(job_id: int):
+    db = SessionLocal()
+    try:
+        job = db.query(ImageLocalizationJob).filter(ImageLocalizationJob.id == job_id).first()
+        if not job:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        job.status = "generating"
+        db.commit()
+
+        for asset in job.assets:
+            _generate_image_localization_asset(asset)
+        _sync_image_localization_job_status(job)
+        db.commit()
+        db.refresh(job)
+        return {"ok": True, "job": _image_localization_job_payload(job)}
+    finally:
+        db.close()
+
+
+@app.post("/api/image-localization/jobs/{job_id}/assets/{asset_id}/generate")
+def generate_image_localization_asset(job_id: int, asset_id: int):
+    db = SessionLocal()
+    try:
+        job = db.query(ImageLocalizationJob).filter(ImageLocalizationJob.id == job_id).first()
+        if not job:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        asset = db.query(ImageLocalizationAsset).filter(
+            ImageLocalizationAsset.id == asset_id,
+            ImageLocalizationAsset.job_id == job_id,
+        ).first()
+        if not asset:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        _generate_image_localization_asset(asset)
+        _sync_image_localization_job_status(job)
+        db.commit()
+        db.refresh(job)
+        db.refresh(asset)
+        return {
+            "ok": True,
+            "asset": _image_localization_asset_payload(asset),
+            "job": _image_localization_job_payload(job),
+        }
+    finally:
+        db.close()
+
+
+def _generate_image_localization_asset(asset: ImageLocalizationAsset) -> None:
+    if asset.status == "failed" and not asset.cropped_path:
+        return
+    try:
+        texts = safe_json_loads(asset.approved_texts_json, [])
+        if not asset.cropped_path or not os.path.exists(asset.cropped_path):
+            raise RuntimeError("cropped_image_missing")
+        asset.output_path = generate_output(asset.cropped_path, texts)
+        asset.status = "complete"
+        asset.error_message = ""
+    except Exception as exc:
+        asset.status = "failed"
+        asset.error_message = f"{type(exc).__name__}: {str(exc)[:400]}"
+
+
+def _sync_image_localization_job_status(job: ImageLocalizationJob) -> None:
+    statuses = [asset.status for asset in job.assets]
+    if not statuses:
+        job.status = "created"
+    elif any(status == "processing" for status in statuses):
+        job.status = "processing"
+    elif all(status == "complete" for status in statuses):
+        job.status = "complete"
+    elif any(status in {"needs_review", "approved"} for status in statuses):
+        job.status = "needs_review"
+    elif any(status == "uploaded" for status in statuses):
+        job.status = "uploaded"
+    else:
+        job.status = "failed"
+
+
+@app.get("/api/image-localization/assets/{asset_id}/file")
+def get_image_localization_asset_file(asset_id: int, kind: str = "cropped"):
+    db = SessionLocal()
+    try:
+        asset = db.query(ImageLocalizationAsset).filter(ImageLocalizationAsset.id == asset_id).first()
+        if not asset:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        paths = {
+            "original": asset.original_path,
+            "cropped": asset.cropped_path,
+            "output": asset.output_path,
+        }
+        path = paths.get(kind)
+        if not path or not os.path.exists(path):
+            return JSONResponse({"error": "file_not_found"}, status_code=404)
+        media_type = "image/png" if path.lower().endswith(".png") else asset.content_type
+        filename = os.path.basename(path)
+        return FileResponse(path, media_type=media_type, filename=filename if kind == "output" else None)
+    finally:
+        db.close()
+
+
+def _image_localization_job_payload(job: ImageLocalizationJob, include_assets: bool = True) -> dict:
+    payload = {
+        "id": job.id,
+        "target_language": job.target_language,
+        "status": job.status,
+        "notes": job.notes or "",
+        "asset_count": len(job.assets or []),
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+    }
+    if include_assets:
+        payload["assets"] = [_image_localization_asset_payload(asset) for asset in sorted(job.assets, key=lambda item: item.id)]
+    return payload
+
+
+def _image_localization_asset_payload(asset: ImageLocalizationAsset) -> dict:
+    output_version = asset.updated_at.isoformat() if asset.updated_at else str(asset.id)
+    return {
+        "id": asset.id,
+        "job_id": asset.job_id,
+        "filename": asset.filename,
+        "content_type": asset.content_type,
+        "status": asset.status,
+        "error_message": asset.error_message or "",
+        "crop": safe_json_loads(asset.crop_json, {}),
+        "ocr": safe_json_loads(asset.ocr_json, []),
+        "translations": safe_json_loads(asset.translations_json, []),
+        "approved_texts": safe_json_loads(asset.approved_texts_json, []),
+        "original_url": f"/api/image-localization/assets/{asset.id}/file?kind=original" if asset.original_path else "",
+        "cropped_url": f"/api/image-localization/assets/{asset.id}/file?kind=cropped" if asset.cropped_path else "",
+        "output_url": f"/api/image-localization/assets/{asset.id}/file?kind=output&v={output_version}" if asset.output_path else "",
+        "created_at": asset.created_at.isoformat() if asset.created_at else None,
+        "updated_at": asset.updated_at.isoformat() if asset.updated_at else None,
+    }
+
+
 # ============ DASHBOARD ROUTES ============
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -1640,3 +2353,8 @@ def routes_page(request: Request):
 @app.get("/dashboard/knowledge", response_class=HTMLResponse)
 def knowledge_page(request: Request):
     return templates.TemplateResponse(request, "knowledge.html", {"active": "knowledge"})
+
+
+@app.get("/dashboard/image-localizer", response_class=HTMLResponse)
+def image_localizer_page(request: Request):
+    return templates.TemplateResponse(request, "image_localizer.html", {"active": "image_localizer"})

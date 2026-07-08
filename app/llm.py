@@ -24,6 +24,27 @@ MODEL_OPTIONS = [
         "notes": "Mevcut varsayilan model",
     },
     {
+        "provider": "gemini",
+        "label": "Gemini 2.5 Pro",
+        "model": "gemini:gemini-2.5-pro",
+        "env": "GEMINI_API_KEY",
+        "notes": "Daha yuksek kalite/reasoning; OCR duzeltme icin kullanilabilir",
+    },
+    {
+        "provider": "gemini",
+        "label": "Gemini 2.0 Flash",
+        "model": "gemini:gemini-2.0-flash",
+        "env": "GEMINI_API_KEY",
+        "notes": "Hizli multimodal model",
+    },
+    {
+        "provider": "gemini",
+        "label": "Gemini 1.5 Flash",
+        "model": "gemini:gemini-1.5-flash",
+        "env": "GEMINI_API_KEY",
+        "notes": "Geriye uyumlu Gemini secenegi",
+    },
+    {
         "provider": "deepseek",
         "label": "DeepSeek V4 Flash",
         "model": "deepseek:deepseek-v4-flash",
@@ -114,7 +135,7 @@ def summarize_llm_usage(events: list[dict]) -> dict:
     }
 
 
-def record_gemini_usage(model_ref: str, response):
+def record_gemini_usage(model_ref: str, response, source: str | None = None, operation: str | None = None):
     usage = getattr(response, "usage_metadata", None)
     if not usage:
         return
@@ -123,6 +144,8 @@ def record_gemini_usage(model_ref: str, response):
         prompt_tokens=getattr(usage, "prompt_token_count", None),
         completion_tokens=getattr(usage, "candidates_token_count", None),
         total_tokens=getattr(usage, "total_token_count", None),
+        source=source,
+        operation=operation,
     )
 
 
@@ -137,6 +160,8 @@ def record_llm_usage(
     actual_provider: str | None = None,
     router: str | None = None,
     cost_details_json: str | None = None,
+    source: str | None = None,
+    operation: str | None = None,
 ):
     events = _USAGE_EVENTS.get()
     if events is None:
@@ -152,6 +177,8 @@ def record_llm_usage(
         "actual_provider": actual_provider,
         "router": router,
         "cost_details_json": cost_details_json,
+        "source": source,
+        "operation": operation,
     })
 
 

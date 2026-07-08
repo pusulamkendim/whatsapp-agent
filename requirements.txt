@@ -9,3 +9,7 @@ jinja2
 python-multipart
 requests
 alembic
+pillow
+numpy
+easyocr
+opencv-python-headless

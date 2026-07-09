@@ -303,6 +303,8 @@ def _generic_prompt_response(agent: Agent, customer_id: str, message: str, knowl
 
     if conversation_key not in generic_conversations:
         generic_conversations[conversation_key] = [{"role": "system", "content": prompt}]
+    else:
+        generic_conversations[conversation_key][0] = {"role": "system", "content": prompt}
     history = generic_conversations[conversation_key]
     history.append({"role": "user", "content": message})
     text = run_openai_simple_chat(model, history)
